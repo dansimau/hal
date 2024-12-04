@@ -1,0 +1,36 @@
+linters:
+  enable-all: true
+  disable:
+    - bodyclose
+    - depguard
+    - exhaustruct
+    - exportloopref
+    - nonamedreturns
+    - wrapcheck
+    # Temporarily disabling while I figure out why severity settings are not working
+    - cyclop
+    - funlen
+    - gocognit
+    - godox
+
+linters-settings:
+  exhaustive:
+    default-signifies-exhaustive: true
+  tagliatelle:
+    case:
+      rules:
+        json: snake
+
+severity:
+  default-severity: info
+  rules:
+    - linters:
+        - funlen
+        - gocognit
+        - godox
+        - nestif
+      severity: info
+
+issues:
+  exclude:
+    - "block should not end with a whitespace"
