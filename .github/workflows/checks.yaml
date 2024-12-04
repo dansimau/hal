@@ -30,6 +30,6 @@ jobs:
       - name: Check coverage
         uses: vladopajic/go-test-coverage@v2
         with:
-          config: ./.testcoverage.yml
+          config: ./.testcoverage.yaml
           git-token: ${{ github.ref_name == 'main' && secrets.GITHUB_TOKEN || '' }}
           git-branch: badges
