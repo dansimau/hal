@@ -1,0 +1,35 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    permissions: write-all
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Run tests
+        run: go test -json ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./... > test-results.json
+
+      - name: Annotate
+        if: always()
+        uses: guyarb/golang-test-annotations@v0.8.0
+        with:
+          test-results: test-results.json
+
+      - name: Check coverage
+        uses: vladopajic/go-test-coverage@v2
+        with:
+          config: ./.testcoverage.yml
+          git-token: ${{ github.ref_name == 'main' && secrets.GITHUB_TOKEN || '' }}
+          git-branch: badges

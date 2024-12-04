@@ -1,3 +1,4 @@
+
 .PHONY: lint
 lint:
 	which golangci-lint || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin v1.62.2
@@ -5,4 +6,6 @@ lint:
 
 .PHONY: test
 test:
-	go test -v ./...
+	which go-test-coverage || go install github.com/vladopajic/go-test-coverage/v2@latest
+	go test -v ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
+	go-test-coverage --config=./.testcoverage.yaml
