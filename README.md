@@ -1,5 +1,6 @@
 # Home Automation Logic (HAL) Framework
 
+![checks](https://github.com/dansimau/hal/actions/workflows/checks.yaml/badge.svg)
 ![coverage](https://raw.githubusercontent.com/dansimau/hal/badges/.badges/main/coverage.svg)
 
 HAL is a framework for programming home automation logic in Golang using Home
