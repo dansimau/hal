@@ -34,3 +34,4 @@ severity:
 issues:
   exclude:
     - "block should not end with a whitespace"
+    - "usage of time.Local"

@@ -11,11 +11,17 @@ const configFilename = "hal.yaml"
 
 type Config struct {
 	HomeAssistant HomeAssistantConfig `yaml:"homeAssistant"`
+	Location      LocationConfig      `yaml:"location"`
 }
 
 type HomeAssistantConfig struct {
 	Host  string `yaml:"host"`
 	Token string `yaml:"token"`
+}
+
+type LocationConfig struct {
+	Latitude  float64 `yaml:"lat"`
+	Longitude float64 `yaml:"lng"`
 }
 
 func LoadConfig() (*Config, error) {

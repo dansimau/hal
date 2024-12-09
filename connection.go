@@ -23,6 +23,8 @@ type Connection struct {
 	mutex sync.RWMutex
 
 	homeAssistant *hassws.Client
+
+	*SunTimes
 }
 
 // ConnectionBinder is an interface that can be implemented by entities to bind
@@ -43,6 +45,8 @@ func NewConnection(cfg Config) *Connection {
 
 		automations: make(map[string][]Automation),
 		entities:    make(map[string]EntityLike),
+
+		SunTimes: NewSunTimes(cfg.Location),
 	}
 }
 
