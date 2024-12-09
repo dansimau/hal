@@ -14,13 +14,15 @@ import (
 // listens for state updates and invokes automations when state changes are detected.
 // TODO: Rename "Connection" to something more descriptive.
 type Connection struct {
-	homeAssistant *hassws.Client
+	config Config
 
 	automations map[string][]Automation
 	entities    map[string]EntityLike
 
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
+
+	homeAssistant *hassws.Client
 }
 
 // ConnectionBinder is an interface that can be implemented by entities to bind
@@ -29,8 +31,14 @@ type ConnectionBinder interface {
 	BindConnection(connection *Connection)
 }
 
-func NewConnection(api *hassws.Client) *Connection {
+func NewConnection(cfg Config) *Connection {
+	api := hassws.NewClient(hassws.ClientConfig{
+		Host:  cfg.HomeAssistant.Host,
+		Token: cfg.HomeAssistant.Token,
+	})
+
 	return &Connection{
+		config:        cfg,
 		homeAssistant: api,
 
 		automations: make(map[string][]Automation),

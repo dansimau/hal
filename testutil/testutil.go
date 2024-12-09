@@ -16,11 +16,12 @@ func NewClientServer(t *testing.T) (*hal.Connection, *hassws.Server, func()) {
 	assert.NilError(t, err)
 
 	// Create client and connection
-	client := hassws.NewWebsocketAPI(hassws.ClientConfig{
-		Host:  server.ListenAddress(),
-		Token: "test-token",
+	conn := hal.NewConnection(hal.Config{
+		HomeAssistant: hal.HomeAssistantConfig{
+			Host:  server.ListenAddress(),
+			Token: "test-token",
+		},
 	})
-	conn := hal.NewConnection(client)
 
 	// Create test entity and register it
 	entity := hal.NewEntity("test.entity")

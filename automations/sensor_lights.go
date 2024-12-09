@@ -7,8 +7,8 @@ import (
 	"github.com/dansimau/hal"
 )
 
-// SensorsTriggerLights is an automation that combines one or more sensors (
-// motion or presence sensors) and a set of lights. Lights are turned on when
+// SensorsTriggerLights is an automation that combines one or more sensors
+// (motion or presence sensors) and a set of lights. Lights are turned on when
 // any of the sensors are triggered and turned off after a given duration.
 type SensorsTriggerLights struct {
 	name string

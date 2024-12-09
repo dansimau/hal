@@ -39,7 +39,7 @@ type ClientConfig struct {
 	Token string
 }
 
-func NewWebsocketAPI(config ClientConfig) *Client {
+func NewClient(config ClientConfig) *Client {
 	return &Client{
 		cfg:       config,
 		responses: make(map[int]chan []byte),
