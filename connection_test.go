@@ -28,6 +28,6 @@ func TestConnection(t *testing.T) {
 
 	// Verify entity state was updated
 	testutil.WaitFor(t, func() bool {
-		return entity.State.State == "on"
+		return entity.GetState().State == "on"
 	})
 }

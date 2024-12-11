@@ -17,7 +17,7 @@ type Connection struct {
 	config Config
 
 	automations map[string][]Automation
-	entities    map[string]EntityLike
+	entities    map[string]EntityInterface
 
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
@@ -44,7 +44,7 @@ func NewConnection(cfg Config) *Connection {
 		homeAssistant: api,
 
 		automations: make(map[string][]Automation),
-		entities:    make(map[string]EntityLike),
+		entities:    make(map[string]EntityInterface),
 
 		SunTimes: NewSunTimes(cfg.Location),
 	}
@@ -63,6 +63,7 @@ func (h *Connection) FindEntities(v any) {
 // RegisterAutomations registers automations and binds them to the relevant entities.
 func (h *Connection) RegisterAutomations(automations ...Automation) {
 	for _, automation := range automations {
+		slog.Info("Registering automation", "Name", automation.Name())
 		for _, entity := range automation.Entities() {
 			h.automations[entity.GetID()] = append(h.automations[entity.GetID()], automation)
 		}
@@ -70,7 +71,7 @@ func (h *Connection) RegisterAutomations(automations ...Automation) {
 }
 
 // RegisterEntities registers entities and binds them to the connection.
-func (h *Connection) RegisterEntities(entities ...EntityLike) {
+func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 	for _, entity := range entities {
 		slog.Info("Registering entity", "EntityID", entity.GetID())
 		entity.BindConnection(h)
@@ -115,6 +116,7 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 
 	// Dispatch automations
 	for _, automation := range h.automations[event.Event.EventData.EntityID] {
+		slog.Info("Running automation", "name", automation.Name())
 		automation.Action()
 	}
 }

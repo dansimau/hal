@@ -12,3 +12,47 @@ type Automation interface {
 	// Action is called when the automation is triggered.
 	Action()
 }
+
+type AutomationConfig struct {
+	action   func()
+	entities Entities
+	name     string
+}
+
+func NewAutomation() *AutomationConfig {
+	return &AutomationConfig{}
+}
+
+func (c *AutomationConfig) Entities() Entities {
+	return c.entities
+}
+
+func (c *AutomationConfig) Action() {
+	c.action()
+}
+
+func (c *AutomationConfig) Name() string {
+	return c.name
+}
+
+func (c *AutomationConfig) WithAction(action func()) *AutomationConfig {
+	c.action = action
+
+	if c.name == "" {
+		c.name = getShortFunctionName(action)
+	}
+
+	return c
+}
+
+func (c *AutomationConfig) WithEntities(entities ...EntityInterface) *AutomationConfig {
+	c.entities = entities
+
+	return c
+}
+
+func (c *AutomationConfig) WithName(name string) *AutomationConfig {
+	c.name = name
+
+	return c
+}

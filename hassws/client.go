@@ -53,7 +53,7 @@ func (c *Client) authenticate() error {
 		return err
 	}
 
-	log.Println("Authenticating")
+	slog.Debug("Authenticating")
 
 	// Send auth message with access token
 	if err := c.send(AuthRequest{
@@ -79,7 +79,7 @@ func (c *Client) authenticate() error {
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, authResponse.Message)
 	}
 
-	log.Println("Authenticated")
+	slog.Debug("Authenticated")
 
 	return nil
 }
@@ -93,14 +93,14 @@ func (c *Client) shutdown() error {
 }
 
 func (c *Client) Connect() error {
-	log.Println("Connecting to", c.cfg.Host)
+	slog.Info("Connecting", "host", c.cfg.Host)
 
 	conn, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://%s/api/websocket", c.cfg.Host), nil)
 	if err != nil {
 		return err
 	}
 
-	log.Println("Connected")
+	slog.Debug("Connection established")
 
 	c.conn = conn
 
@@ -116,6 +116,8 @@ func (c *Client) Connect() error {
 
 // Listen for messages from the websocket and dispatch to listener channels.
 func (c *Client) listen() {
+	slog.Info("Connection established, listening for state changes")
+
 	for {
 		_, msgBytes, err := c.conn.ReadMessage()
 		if err != nil {

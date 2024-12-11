@@ -12,31 +12,35 @@ import (
 // any of the sensors are triggered and turned off after a given duration.
 type SensorsTriggerLights struct {
 	name string
+	log  *slog.Logger
 
-	sensors       []hal.EntityLike
-	lights        []*hal.Light
+	sensors       []hal.EntityInterface
+	lights        []hal.LightInterface
 	turnsOffAfter *time.Duration
 
 	turnOffTimer *time.Timer
 }
 
 func NewSensorsTriggersLights() *SensorsTriggerLights {
-	return &SensorsTriggerLights{}
+	return &SensorsTriggerLights{
+		log: slog.Default(),
+	}
 }
 
 func (a *SensorsTriggerLights) WithName(name string) *SensorsTriggerLights {
 	a.name = name
+	a.log = slog.With("automation", a.name)
 
 	return a
 }
 
-func (a *SensorsTriggerLights) WithSensors(sensors ...hal.EntityLike) *SensorsTriggerLights {
+func (a *SensorsTriggerLights) WithSensors(sensors ...hal.EntityInterface) *SensorsTriggerLights {
 	a.sensors = sensors
 
 	return a
 }
 
-func (a *SensorsTriggerLights) WithLights(lights ...*hal.Light) *SensorsTriggerLights {
+func (a *SensorsTriggerLights) WithLights(lights ...hal.LightInterface) *SensorsTriggerLights {
 	a.lights = lights
 
 	return a
@@ -86,6 +90,8 @@ func (a *SensorsTriggerLights) turnOnLights() {
 }
 
 func (a *SensorsTriggerLights) turnOffLights() {
+	a.log.Info("Turning off lights")
+
 	for _, light := range a.lights {
 		if err := light.TurnOff(); err != nil {
 			slog.Error("Error turning off light", "error", err)
@@ -95,9 +101,11 @@ func (a *SensorsTriggerLights) turnOffLights() {
 
 func (a *SensorsTriggerLights) Action() {
 	if a.triggered() {
+		a.log.Info("Sensor triggered, turning on lights")
 		a.stopTurnOffTimer()
 		a.turnOnLights()
 	} else {
+		a.log.Info("Sensor cleared, starting turn off countdown")
 		a.startTurnOffTimer()
 	}
 }

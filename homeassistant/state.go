@@ -1,7 +1,6 @@
 package homeassistant
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -12,13 +11,8 @@ const (
 type State struct {
 	EntityID string `json:"entity_id"`
 
-	State      string `json:"state"`
-	Attributes struct {
-		DeviceClass  string `json:"device_class"`
-		FriendlyName string `json:"friendly_name"`
-
-		json.RawMessage
-	} `json:"attributes"`
+	State      string         `json:"state"`
+	Attributes map[string]any `json:"attributes"`
 
 	LastChanged  time.Time `json:"last_changed"`
 	LastReported time.Time `json:"last_reported"`

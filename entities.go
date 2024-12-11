@@ -6,9 +6,9 @@ import (
 	"github.com/dansimau/hal/homeassistant"
 )
 
-// EntityLike is the interface that we accept which allows us to create
+// EntityInterface is the interface that we accept which allows us to create
 // custom components that embed an Entity.
-type EntityLike interface {
+type EntityInterface interface {
 	ConnectionBinder
 
 	GetID() string
@@ -16,17 +16,16 @@ type EntityLike interface {
 	SetState(event homeassistant.State)
 }
 
-type Entities []EntityLike
+type Entities []EntityInterface
 
 // Entity is a base type for all entities that can be embedded into other types.
 type Entity struct {
 	connection *Connection
-
-	homeassistant.State
+	state      homeassistant.State
 }
 
 func NewEntity(id string) *Entity {
-	return &Entity{State: homeassistant.State{EntityID: id}}
+	return &Entity{state: homeassistant.State{EntityID: id}}
 }
 
 // BindConnection binds the entity to the connection. This allows entities to
@@ -36,20 +35,20 @@ func (e *Entity) BindConnection(connection *Connection) {
 }
 
 func (e *Entity) GetID() string {
-	return e.State.EntityID
+	return e.state.EntityID
 }
 
 func (e *Entity) SetState(state homeassistant.State) {
-	e.State = state
+	e.state = state
 }
 
 func (e *Entity) GetState() homeassistant.State {
-	return e.State
+	return e.state
 }
 
 // findEntities recursively finds all entities in a struct, map, or slice.
-func findEntities(v any) []EntityLike {
-	var entities []EntityLike
+func findEntities(v any) []EntityInterface {
+	var entities []EntityInterface
 
 	value := reflect.ValueOf(v)
 	if value.Kind() == reflect.Ptr {
@@ -73,7 +72,7 @@ func findEntities(v any) []EntityLike {
 
 		// Check if field implements EntityLike interface
 		if field.Kind() == reflect.Ptr && !field.IsNil() {
-			if entity, ok := field.Interface().(EntityLike); ok {
+			if entity, ok := field.Interface().(EntityInterface); ok {
 				entities = append(entities, entity)
 
 				continue
