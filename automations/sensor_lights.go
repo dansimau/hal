@@ -14,6 +14,8 @@ type SensorsTriggerLights struct {
 	name string
 	log  *slog.Logger
 
+	condition func() bool
+
 	sensors       []hal.EntityInterface
 	lights        []hal.LightInterface
 	turnsOffAfter *time.Duration
@@ -25,6 +27,13 @@ func NewSensorsTriggersLights() *SensorsTriggerLights {
 	return &SensorsTriggerLights{
 		log: slog.Default(),
 	}
+}
+
+// WithCondition sets a condition that must be true for the automation to run.
+func (a *SensorsTriggerLights) WithCondition(condition func() bool) *SensorsTriggerLights {
+	a.condition = condition
+
+	return a
 }
 
 func (a *SensorsTriggerLights) WithName(name string) *SensorsTriggerLights {
@@ -100,6 +109,11 @@ func (a *SensorsTriggerLights) turnOffLights() {
 }
 
 func (a *SensorsTriggerLights) Action() {
+	if a.condition != nil && !a.condition() {
+		a.log.Info("Condition not met, skipping")
+		return
+	}
+
 	if a.triggered() {
 		a.log.Info("Sensor triggered, turning on lights")
 		a.stopTurnOffTimer()
