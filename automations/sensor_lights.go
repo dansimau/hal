@@ -23,7 +23,7 @@ type SensorsTriggerLights struct {
 	turnOffTimer *time.Timer
 }
 
-func NewSensorsTriggersLights() *SensorsTriggerLights {
+func NewSensorsTriggerLights() *SensorsTriggerLights {
 	return &SensorsTriggerLights{
 		log: slog.Default(),
 	}
