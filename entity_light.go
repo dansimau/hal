@@ -28,6 +28,7 @@ func (l *Light) IsOn() bool {
 func (l *Light) TurnOn() error {
 	if l.connection == nil {
 		slog.Error("Light not registered", "entity", l.GetID())
+
 		return ErrEntityNotRegistered
 	}
 
@@ -51,6 +52,7 @@ func (l *Light) TurnOn() error {
 func (l *Light) TurnOff() error {
 	if l.connection == nil {
 		slog.Error("Light not registered", "entity", l.GetID())
+
 		return ErrEntityNotRegistered
 	}
 

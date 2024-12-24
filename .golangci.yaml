@@ -20,6 +20,9 @@ linters-settings:
     case:
       rules:
         json: snake
+  varnamelen:
+    max-distance: 12
+    min-name-length: 2
 
 severity:
   default-severity: info
