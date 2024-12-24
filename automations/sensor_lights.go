@@ -14,11 +14,11 @@ type SensorsTriggerLights struct {
 	name string
 	log  *slog.Logger
 
-	condition func() bool
-
-	sensors       []hal.EntityInterface
-	lights        []hal.LightInterface
-	turnsOffAfter *time.Duration
+	condition      func() bool // optional: func that must return true for the automation to run
+	sensors        []hal.EntityInterface
+	turnsOnLights  []hal.LightInterface
+	turnsOffLights []hal.LightInterface
+	turnsOffAfter  *time.Duration // optional: duration after which lights will turn off after being turned on
 
 	turnOffTimer *time.Timer
 }
@@ -36,6 +36,16 @@ func (a *SensorsTriggerLights) WithCondition(condition func() bool) *SensorsTrig
 	return a
 }
 
+// WithLights sets the lights that will be turned on and off. Overrides
+// TurnsOnLights and TurnsOffLights.
+func (a *SensorsTriggerLights) WithLights(lights ...hal.LightInterface) *SensorsTriggerLights {
+	a.turnsOnLights = lights
+	a.turnsOffLights = lights
+
+	return a
+}
+
+// WithName sets the name of the automation (appears in logs).
 func (a *SensorsTriggerLights) WithName(name string) *SensorsTriggerLights {
 	a.name = name
 	a.log = slog.With("automation", a.name)
@@ -43,18 +53,33 @@ func (a *SensorsTriggerLights) WithName(name string) *SensorsTriggerLights {
 	return a
 }
 
+// WithSensors sets the sensors that will trigger the lights.
 func (a *SensorsTriggerLights) WithSensors(sensors ...hal.EntityInterface) *SensorsTriggerLights {
 	a.sensors = sensors
 
 	return a
 }
 
-func (a *SensorsTriggerLights) WithLights(lights ...hal.LightInterface) *SensorsTriggerLights {
-	a.lights = lights
+// TurnsOnLights sets the lights that will be turned on by the sensor. This can
+// be used in conjunction with TurnsOffLights to turn on and off different sets
+// of lights.
+func (a *SensorsTriggerLights) TurnsOnLights(lights ...hal.LightInterface) *SensorsTriggerLights {
+	a.turnsOnLights = lights
 
 	return a
 }
 
+// TurnsOffLights sets the lights that will be turned off by the sensor. This can
+// be used in conjunction with TurnsOnLights to turn on and off different sets
+// of lights.
+func (a *SensorsTriggerLights) TurnsOffLights(lights ...hal.LightInterface) *SensorsTriggerLights {
+	a.turnsOffLights = lights
+
+	return a
+}
+
+// TurnsOffAfter sets the duration after which the lights will turn off after being
+// turned on.
 func (a *SensorsTriggerLights) TurnsOffAfter(turnsOffAfter time.Duration) *SensorsTriggerLights {
 	a.turnsOffAfter = &turnsOffAfter
 
@@ -91,7 +116,7 @@ func (a *SensorsTriggerLights) stopTurnOffTimer() {
 }
 
 func (a *SensorsTriggerLights) turnOnLights() {
-	for _, light := range a.lights {
+	for _, light := range a.turnsOnLights {
 		if err := light.TurnOn(); err != nil {
 			slog.Error("Error turning on light", "error", err)
 		}
@@ -101,7 +126,7 @@ func (a *SensorsTriggerLights) turnOnLights() {
 func (a *SensorsTriggerLights) turnOffLights() {
 	a.log.Info("Turning off lights")
 
-	for _, light := range a.lights {
+	for _, light := range a.turnsOffLights {
 		if err := light.TurnOff(); err != nil {
 			slog.Error("Error turning off light", "error", err)
 		}
@@ -111,6 +136,7 @@ func (a *SensorsTriggerLights) turnOffLights() {
 func (a *SensorsTriggerLights) Action() {
 	if a.condition != nil && !a.condition() {
 		a.log.Info("Condition not met, skipping")
+
 		return
 	}
 
