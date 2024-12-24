@@ -7,7 +7,10 @@ import (
 
 	"github.com/dansimau/hal/hassws"
 	"github.com/dansimau/hal/perf"
+	"github.com/dansimau/hal/store"
 	"github.com/davecgh/go-spew/spew"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Connection is a new instance of the HAL framework. It connects to Home Assistant,
@@ -15,6 +18,7 @@ import (
 // TODO: Rename "Connection" to something more descriptive.
 type Connection struct {
 	config Config
+	db     *gorm.DB
 
 	automations map[string][]Automation
 	entities    map[string]EntityInterface
@@ -34,6 +38,11 @@ type ConnectionBinder interface {
 }
 
 func NewConnection(cfg Config) *Connection {
+	db, err := store.Open("sqlite.db")
+	if err != nil {
+		panic(err)
+	}
+
 	api := hassws.NewClient(hassws.ClientConfig{
 		Host:  cfg.HomeAssistant.Host,
 		Token: cfg.HomeAssistant.Token,
@@ -41,6 +50,7 @@ func NewConnection(cfg Config) *Connection {
 
 	return &Connection{
 		config:        cfg,
+		db:            db,
 		homeAssistant: api,
 
 		automations: make(map[string][]Automation),
@@ -64,6 +74,7 @@ func (h *Connection) FindEntities(v any) {
 func (h *Connection) RegisterAutomations(automations ...Automation) {
 	for _, automation := range automations {
 		slog.Info("Registering automation", "Name", automation.Name())
+
 		for _, entity := range automation.Entities() {
 			h.automations[entity.GetID()] = append(h.automations[entity.GetID()], automation)
 		}
@@ -113,6 +124,15 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	if event.Event.EventData.NewState != nil {
 		entity.SetState(*event.Event.EventData.NewState)
 	}
+
+	// Update database
+	h.db.Clauses(clause.OnConflict{
+		UpdateAll: true,
+	}).Create(&store.Entity{
+		ID:    event.Event.EventData.EntityID,
+		Type:  entity.GetID(),
+		State: event.Event.EventData.NewState,
+	})
 
 	// Dispatch automations
 	for _, automation := range h.automations[event.Event.EventData.EntityID] {
