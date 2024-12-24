@@ -9,7 +9,7 @@ import (
 
 type LightInterface interface {
 	IsOn() bool
-	TurnOn() error
+	TurnOn(attributes ...map[string]any) error
 	TurnOff() error
 }
 
@@ -25,7 +25,7 @@ func (l *Light) IsOn() bool {
 	return l.Entity.GetState().State == "on"
 }
 
-func (l *Light) TurnOn() error {
+func (l *Light) TurnOn(attributes ...map[string]any) error {
 	if l.connection == nil {
 		slog.Error("Light not registered", "entity", l.GetID())
 
@@ -34,13 +34,21 @@ func (l *Light) TurnOn() error {
 
 	slog.Debug("Turning on light", "entity", l.GetID())
 
+	data := map[string]any{
+		"entity_id": []string{l.GetID()},
+	}
+
+	for _, attribute := range attributes {
+		for k, v := range attribute {
+			data[k] = v
+		}
+	}
+
 	_, err := l.connection.HomeAssistant().CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
 		Domain:  "light",
 		Service: "turn_on",
-		Data: map[string]any{
-			"entity_id": []string{l.GetID()},
-		},
+		Data:    data,
 	})
 	if err != nil {
 		slog.Error("Error turning on light", "entity", l.GetID(), "error", err)
@@ -85,11 +93,11 @@ func (lg LightGroup) IsOn() bool {
 	return true
 }
 
-func (lg LightGroup) TurnOn() error {
+func (lg LightGroup) TurnOn(attributes ...map[string]any) error {
 	var errs []error
 
 	for _, l := range lg {
-		if err := l.TurnOn(); err != nil {
+		if err := l.TurnOn(attributes...); err != nil {
 			errs = append(errs, err)
 		}
 	}
