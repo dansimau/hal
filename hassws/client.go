@@ -330,5 +330,9 @@ func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error
 		return CallServiceResponse{}, err
 	}
 
+	if resp.Type == MessageTypeResult && !resp.Success {
+		slog.Error("Call service failed", "err", resp.Error)
+	}
+
 	return resp, nil
 }

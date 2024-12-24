@@ -119,7 +119,7 @@ func (s *Server) listen() {
 				Success: true,
 			})
 		default:
-			panic("[Server]Unknown message type: " + cmd.Type)
+			panic("[Server] Unknown message type: " + cmd.Type)
 		}
 	}
 }

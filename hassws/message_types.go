@@ -53,7 +53,7 @@ type EventMessage struct {
 type subscribeEventsRequest struct {
 	ID        int         `json:"id"`
 	Type      MessageType `json:"type"`
-	EventType string      `json:"event_type"`
+	EventType string      `json:"event_type,omitempty"`
 }
 
 type subscribeEventsResponse struct {
@@ -79,6 +79,7 @@ type CallServiceResponse struct {
 			ID string `json:"id"`
 		} `json:"context"`
 	} `json:"result"`
+	Error map[string]any `json:"error,omitempty"`
 }
 
 type jsonMessage map[string]any
