@@ -19,6 +19,15 @@ type SensorsTriggerLights struct {
 	name string
 	log  *slog.Logger
 
+	// Brightness is the brightness of the lights when they are turned on. We
+	// have to set a brightness here so support dimming lights before turn off.
+	// The reason is that Home Assistant doesn't support changing the brightness of
+	// a light while it is off. Because the light is dimmed prior to turn off,
+	// turning it back on would mean it comes back on in a dimmed state. Thus we
+	// have to specify a default brightness when turning on to avoid this.
+	brightness float64
+	scene      map[string]any
+
 	condition      func() bool // optional: func that must return true for the automation to run
 	conditionScene []ConditionScene
 	sensors        []hal.EntityInterface
@@ -26,13 +35,22 @@ type SensorsTriggerLights struct {
 	turnsOffLights []hal.LightInterface
 	turnsOffAfter  *time.Duration // optional: duration after which lights will turn off after being turned on
 
-	turnOffTimer *time.Timer
+	dimLightsTimer *time.Timer
+	turnOffTimer   *time.Timer
 }
 
 func NewSensorsTriggerLights() *SensorsTriggerLights {
 	return &SensorsTriggerLights{
-		log: slog.Default(),
+		brightness: 255,
+		log:        slog.Default(),
 	}
+}
+
+// WithBrightness sets the brightness of the lights when they are turned on.
+func (a *SensorsTriggerLights) WithBrightness(brightness float64) *SensorsTriggerLights {
+	a.brightness = brightness
+
+	return a
 }
 
 // WithCondition sets a condition that must be true for the automation to run.
@@ -102,6 +120,12 @@ func (a *SensorsTriggerLights) TurnsOffAfter(turnsOffAfter time.Duration) *Senso
 	return a
 }
 
+func (a *SensorsTriggerLights) SetScene(scene map[string]any) *SensorsTriggerLights {
+	a.scene = scene
+
+	return a
+}
+
 // triggered returns true if any of the sensors have been triggered.
 func (a *SensorsTriggerLights) triggered() bool {
 	for _, sensor := range a.sensors {
@@ -111,6 +135,24 @@ func (a *SensorsTriggerLights) triggered() bool {
 	}
 
 	return false
+}
+
+func (a *SensorsTriggerLights) startDimLightsTimer() {
+	if a.turnsOffAfter == nil {
+		return
+	}
+
+	// TODO: Make this configurable
+	dimLightsAfter := *a.turnsOffAfter - 10*time.Second
+	if dimLightsAfter < 1*time.Second {
+		return
+	}
+
+	if a.dimLightsTimer == nil {
+		a.dimLightsTimer = time.AfterFunc(dimLightsAfter, a.dimLights)
+	} else {
+		a.dimLightsTimer.Reset(dimLightsAfter)
+	}
 }
 
 func (a *SensorsTriggerLights) startTurnOffTimer() {
@@ -123,6 +165,8 @@ func (a *SensorsTriggerLights) startTurnOffTimer() {
 	} else {
 		a.turnOffTimer.Reset(*a.turnsOffAfter)
 	}
+
+	a.startDimLightsTimer()
 }
 
 func (a *SensorsTriggerLights) stopTurnOffTimer() {
@@ -134,15 +178,44 @@ func (a *SensorsTriggerLights) stopTurnOffTimer() {
 func (a *SensorsTriggerLights) turnOnLights() {
 	var attributes map[string]any
 
+	// If a scene is set, use it.
+	if a.scene != nil {
+		attributes = a.scene
+	}
+
+	// If a condition scene matches use that
 	for _, conditionScene := range a.conditionScene {
 		if conditionScene.Condition() {
 			attributes = conditionScene.Scene
 		}
 	}
 
+	// Otherwise use the default brightness.
+	if attributes == nil {
+		attributes = map[string]any{"brightness": a.brightness}
+	}
+
 	for _, light := range a.turnsOnLights {
 		if err := light.TurnOn(attributes); err != nil {
 			slog.Error("Error turning on light", "error", err)
+		}
+	}
+}
+
+func (a *SensorsTriggerLights) dimLights() {
+	a.log.Info("Dimming lights prior to turning off")
+
+	for _, light := range a.turnsOffLights {
+		brightness := light.GetBrightness()
+		if brightness < 2 {
+			a.log.Info("Light is already at minimum brightness, skipping dimming", "light", light.GetID())
+			continue
+		}
+
+		dimmedBrightness := brightness / 2
+
+		if err := light.TurnOn(map[string]any{"brightness": dimmedBrightness}); err != nil {
+			slog.Error("Error dimming light", "error", err)
 		}
 	}
 }
