@@ -137,6 +137,6 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	// Dispatch automations
 	for _, automation := range h.automations[event.Event.EventData.EntityID] {
 		slog.Info("Running automation", "name", automation.Name())
-		automation.Action()
+		automation.Action(entity)
 	}
 }

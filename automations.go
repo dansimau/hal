@@ -10,11 +10,11 @@ type Automation interface {
 	Entities() Entities
 
 	// Action is called when the automation is triggered.
-	Action()
+	Action(trigger EntityInterface)
 }
 
 type AutomationConfig struct {
-	action   func()
+	action   func(trigger EntityInterface)
 	entities Entities
 	name     string
 }
@@ -27,15 +27,15 @@ func (c *AutomationConfig) Entities() Entities {
 	return c.entities
 }
 
-func (c *AutomationConfig) Action() {
-	c.action()
+func (c *AutomationConfig) Action(trigger EntityInterface) {
+	c.action(trigger)
 }
 
 func (c *AutomationConfig) Name() string {
 	return c.name
 }
 
-func (c *AutomationConfig) WithAction(action func()) *AutomationConfig {
+func (c *AutomationConfig) WithAction(action func(trigger EntityInterface)) *AutomationConfig {
 	c.action = action
 
 	if c.name == "" {

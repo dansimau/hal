@@ -75,9 +75,10 @@ func (a *Timer) Entities() hal.Entities {
 	return a.entities
 }
 
-func (a *Timer) Action() {
+func (a *Timer) Action(_ hal.EntityInterface) {
 	if a.condition != nil && !a.condition() {
 		slog.Info("Condition not met, not starting timer", "automation", a.name)
+
 		return
 	}
 

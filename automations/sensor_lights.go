@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/dansimau/hal"
+	"github.com/dansimau/hal/timerutil"
 )
 
 type ConditionScene struct {
@@ -28,15 +29,17 @@ type SensorsTriggerLights struct {
 	brightness float64
 	scene      map[string]any
 
-	condition      func() bool // optional: func that must return true for the automation to run
-	conditionScene []ConditionScene
-	sensors        []hal.EntityInterface
-	turnsOnLights  []hal.LightInterface
-	turnsOffLights []hal.LightInterface
-	turnsOffAfter  *time.Duration // optional: duration after which lights will turn off after being turned on
+	condition        func() bool // optional: func that must return true for the automation to run
+	conditionScene   []ConditionScene
+	humanOverrideFor *time.Duration // optional: duration after which lights will turn off after being turned on from outside this system
+	sensors          []hal.EntityInterface
+	turnsOnLights    []hal.LightInterface
+	turnsOffLights   []hal.LightInterface
+	turnsOffAfter    *time.Duration // optional: duration after which lights will turn off after being turned on
 
-	dimLightsTimer *time.Timer
-	turnOffTimer   *time.Timer
+	dimLightsTimer     *time.Timer
+	humanOverrideTimer *timerutil.Timer
+	turnOffTimer       *time.Timer
 }
 
 func NewSensorsTriggerLights() *SensorsTriggerLights {
@@ -66,6 +69,14 @@ func (a *SensorsTriggerLights) WithConditionScene(condition func() bool, scene m
 		Condition: condition,
 		Scene:     scene,
 	})
+
+	return a
+}
+
+// WithHumanOverrideFor sets a secondary timer that will kick in if the light
+// was turned on from outside this system.
+func (a *SensorsTriggerLights) WithHumanOverrideFor(duration time.Duration) *SensorsTriggerLights {
+	a.humanOverrideFor = &duration
 
 	return a
 }
@@ -137,6 +148,16 @@ func (a *SensorsTriggerLights) triggered() bool {
 	return false
 }
 
+func (a *SensorsTriggerLights) lightsOn() bool {
+	for _, light := range a.turnsOnLights {
+		if light.GetState().State == "on" {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (a *SensorsTriggerLights) startDimLightsTimer() {
 	if a.turnsOffAfter == nil {
 		return
@@ -178,6 +199,8 @@ func (a *SensorsTriggerLights) stopTurnOffTimer() {
 func (a *SensorsTriggerLights) stopDimLightsTimer() {
 	if a.dimLightsTimer != nil {
 		a.dimLightsTimer.Stop()
+		// TODO: Detect if the timer was actually running and if so print a log
+		// message saying we stopped the timer.
 	}
 }
 
@@ -215,6 +238,7 @@ func (a *SensorsTriggerLights) dimLights() {
 		brightness := light.GetBrightness()
 		if brightness < 2 {
 			a.log.Info("Light is already at minimum brightness, skipping dimming", "light", light.GetID())
+
 			continue
 		}
 
@@ -236,7 +260,33 @@ func (a *SensorsTriggerLights) turnOffLights() {
 	}
 }
 
-func (a *SensorsTriggerLights) Action() {
+func (a *SensorsTriggerLights) lightTriggered(trigger hal.EntityInterface) bool {
+	for _, light := range a.turnsOnLights {
+		if light.GetID() == trigger.GetID() {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (a *SensorsTriggerLights) sensorTriggered(trigger hal.EntityInterface) bool {
+	for _, sensor := range a.sensors {
+		if sensor.GetID() == trigger.GetID() {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (a *SensorsTriggerLights) handleSensorTriggered() {
+	if a.humanOverrideTimer.IsRunning() {
+		a.log.Info("Light overridden by human, skipping")
+
+		return
+	}
+
 	if a.condition != nil && !a.condition() {
 		a.log.Info("Condition not met, skipping")
 
@@ -251,6 +301,28 @@ func (a *SensorsTriggerLights) Action() {
 	} else {
 		a.log.Info("Sensor cleared, starting turn off countdown")
 		a.startTurnOffTimer()
+	}
+}
+
+func (a *SensorsTriggerLights) handleLightTriggered() {
+	a.stopDimLightsTimer()
+
+	if a.humanOverrideFor != nil {
+		a.stopTurnOffTimer()
+
+		if a.lightsOn() {
+			a.humanOverrideTimer.Reset(*a.humanOverrideFor)
+		} else {
+			a.humanOverrideTimer.Stop()
+		}
+	}
+}
+
+func (a *SensorsTriggerLights) Action(trigger hal.EntityInterface) {
+	if a.sensorTriggered(trigger) {
+		a.handleSensorTriggered()
+	} else if a.lightTriggered(trigger) {
+		a.handleLightTriggered()
 	}
 }
 

@@ -24,7 +24,7 @@ func (p *PrintDebug) Entities() hal.Entities {
 	return p.entities
 }
 
-func (p *PrintDebug) Action() {
+func (p *PrintDebug) Action(_ hal.EntityInterface) {
 	for _, entity := range p.entities {
 		log.Printf("[%s] Entity %s state: %+v", p.name, entity.GetID(), entity.GetState())
 	}
