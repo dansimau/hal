@@ -175,6 +175,12 @@ func (a *SensorsTriggerLights) stopTurnOffTimer() {
 	}
 }
 
+func (a *SensorsTriggerLights) stopDimLightsTimer() {
+	if a.dimLightsTimer != nil {
+		a.dimLightsTimer.Stop()
+	}
+}
+
 func (a *SensorsTriggerLights) turnOnLights() {
 	var attributes map[string]any
 
@@ -240,6 +246,7 @@ func (a *SensorsTriggerLights) Action() {
 	if a.triggered() {
 		a.log.Info("Sensor triggered, turning on lights")
 		a.stopTurnOffTimer()
+		a.stopDimLightsTimer()
 		a.turnOnLights()
 	} else {
 		a.log.Info("Sensor cleared, starting turn off countdown")
