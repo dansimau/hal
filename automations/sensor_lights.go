@@ -281,7 +281,7 @@ func (a *SensorsTriggerLights) sensorTriggered(trigger hal.EntityInterface) bool
 }
 
 func (a *SensorsTriggerLights) handleSensorTriggered() {
-	if a.humanOverrideTimer.IsRunning() {
+	if a.humanOverrideTimer != nil && a.humanOverrideTimer.IsRunning() {
 		a.log.Info("Light overridden by human, skipping")
 
 		return
