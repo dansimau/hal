@@ -294,9 +294,18 @@ func (a *SensorsTriggerLights) handleSensorTriggered() {
 	}
 
 	if a.triggered() {
-		a.log.Info("Sensor triggered, turning on lights")
 		a.stopTurnOffTimer()
 		a.stopDimLightsTimer()
+
+		// This avoids a situation where the user has changed the lights state
+		// but it gets overridden by a sensor being triggered again.
+		if a.lightsOn() {
+			a.log.Info("Sensor triggered, but lights are already on, ignoring")
+
+			return
+		}
+
+		a.log.Info("Sensor triggered, turning on lights")
 		a.turnOnLights()
 	} else {
 		a.log.Info("Sensor cleared, starting turn off countdown")
