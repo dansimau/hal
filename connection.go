@@ -1,6 +1,7 @@
 package hal
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -96,7 +97,39 @@ func (h *Connection) Start() error {
 		return err
 	}
 
-	return h.HomeAssistant().SubscribeEvents(string(hassws.MessageTypeStateChanged), h.StateChangeEvent)
+	if err := h.HomeAssistant().SubscribeEvents(string(hassws.MessageTypeStateChanged), h.StateChangeEvent); err != nil {
+		return fmt.Errorf("failed to subscribe to state changed events: %w", err)
+	}
+
+	if err := h.syncStates(); err != nil {
+		return fmt.Errorf("failed to sync initial states: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Connection) syncStates() error {
+	defer perf.Timer(func(timeTaken time.Duration) {
+		slog.Info("Initial state sync complete", "duration", timeTaken)
+	})()
+
+	states, err := h.HomeAssistant().GetStates()
+	if err != nil {
+		return err
+	}
+
+	for _, state := range states {
+		entity, ok := h.entities[state.EntityID]
+		if !ok {
+			continue
+		}
+
+		slog.Debug("Setting initial state", "EntityID", state.EntityID, "State", state)
+
+		entity.SetState(state)
+	}
+
+	return nil
 }
 
 // Process incoming state change events. Dispatch state change to the relevant

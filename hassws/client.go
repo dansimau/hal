@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dansimau/hal/homeassistant"
 	"github.com/gorilla/websocket"
 )
 
@@ -116,7 +117,7 @@ func (c *Client) Connect() error {
 
 // Listen for messages from the websocket and dispatch to listener channels.
 func (c *Client) listen() {
-	slog.Info("Connection established, listening for state changes")
+	slog.Info("Connection established")
 
 	for {
 		_, msgBytes, err := c.conn.ReadMessage()
@@ -311,6 +312,8 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 		}
 	}(responseChan)
 
+	slog.Info("Listening for state changes")
+
 	return nil
 }
 
@@ -335,4 +338,37 @@ func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error
 	}
 
 	return resp, nil
+}
+
+func (c *Client) GetStates() ([]homeassistant.State, error) {
+	msg := CommandMessage{
+		ID:   c.nextMsgID(),
+		Type: MessageTypeGetStates,
+	}
+
+	reqBytes, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	resBytes, err := c.sendMessageWaitResponse(reqBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp CommandResponse
+	if err := json.Unmarshal(resBytes, &resp); err != nil {
+		return nil, err
+	}
+
+	if !resp.Success {
+		return nil, fmt.Errorf("%w: %s", ErrUnexpectedResponse, resp.Error)
+	}
+
+	var states []homeassistant.State
+	if err := json.Unmarshal(resp.Result, &states); err != nil {
+		return nil, err
+	}
+
+	return states, nil
 }

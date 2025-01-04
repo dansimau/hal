@@ -1,6 +1,10 @@
 package hassws
 
-import "github.com/dansimau/hal/homeassistant"
+import (
+	"encoding/json"
+
+	"github.com/dansimau/hal/homeassistant"
+)
 
 const (
 	MessageTypeAuthChallenge   MessageType = "auth_challenge"
@@ -8,6 +12,7 @@ const (
 	MessageTypeAuthResponse    MessageType = "auth_response"
 	MessageTypeCallService     MessageType = "call_service"
 	MessageTypeEvent           MessageType = "event"
+	MessageTypeGetStates       MessageType = "get_states"
 	MessageTypeResult          MessageType = "result"
 	MessageTypeStateChanged    MessageType = "state_changed"
 	MessageTypeSubscribeEvents MessageType = "subscribe_events"
@@ -18,6 +23,13 @@ type MessageType string
 type CommandMessage struct {
 	ID   int         `json:"id"`
 	Type MessageType `json:"type"`
+}
+
+type CommandResponse struct {
+	Type    MessageType     `json:"type"`
+	Success bool            `json:"success"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   json.RawMessage `json:"error,omitempty"`
 }
 
 type AuthChallenge struct {
