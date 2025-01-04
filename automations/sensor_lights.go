@@ -314,11 +314,13 @@ func (a *SensorsTriggerLights) handleSensorTriggered() {
 }
 
 func (a *SensorsTriggerLights) handleLightTriggered() {
+	// Light was either turned on or off, or brightness changed or whatever,
+	// in which case we want to stop any further automations since the user has
+	// overridden it and we want to respect that.
 	a.stopDimLightsTimer()
+	a.stopTurnOffTimer()
 
 	if a.humanOverrideFor != nil {
-		a.stopTurnOffTimer()
-
 		if a.lightsOn() {
 			a.humanOverrideTimer.Reset(*a.humanOverrideFor)
 		} else {
