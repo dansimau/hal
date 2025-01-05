@@ -88,6 +88,11 @@ func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 		slog.Info("Registering entity", "EntityID", entity.GetID())
 		entity.BindConnection(h)
 		h.entities[entity.GetID()] = entity
+
+		// Entities can also be automations
+		if automation, ok := entity.(Automation); ok {
+			h.RegisterAutomations(automation)
+		}
 	}
 }
 
