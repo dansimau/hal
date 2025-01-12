@@ -108,6 +108,13 @@ func (s *Server) listen() {
 		}
 
 		switch cmd.Type {
+		case MessageTypeCallService:
+			s.SendMessage(CallServiceResponse{
+				ID:      cmd.ID,
+				Type:    MessageTypeResult,
+				Success: true,
+			})
+
 		case MessageTypeSubscribeEvents:
 			s.lock.Lock()
 			s.subscribers = append(s.subscribers, cmd.ID)
@@ -117,6 +124,17 @@ func (s *Server) listen() {
 				ID:      cmd.ID,
 				Type:    MessageTypeResult,
 				Success: true,
+			})
+
+		case MessageTypeGetStates:
+			s.SendMessage(CommandResponse{
+				ID:      cmd.ID,
+				Type:    MessageTypeResult,
+				Success: true,
+				// TODO: Either keep state on the server site, or allow testers
+				// to set it. For now we just leave it empty so tests don't
+				// crash.
+				Result: json.RawMessage("[]"),
 			})
 		default:
 			panic("[Server] Unknown message type: " + cmd.Type)

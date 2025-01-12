@@ -6,6 +6,7 @@ import (
 	"github.com/dansimau/hal"
 	"github.com/dansimau/hal/homeassistant"
 	"github.com/dansimau/hal/testutil"
+	"github.com/davecgh/go-spew/spew"
 )
 
 func TestConnection(t *testing.T) {
@@ -26,8 +27,9 @@ func TestConnection(t *testing.T) {
 		},
 	})
 
-	// Verify entity state was updated
-	testutil.WaitFor(t, func() bool {
+	testutil.WaitFor(t, "verify entity state was updated", func() bool {
 		return entity.GetState().State == "on"
+	}, func() {
+		spew.Dump(entity.GetID(), entity.GetState())
 	})
 }

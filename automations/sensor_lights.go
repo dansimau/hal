@@ -29,23 +29,25 @@ type SensorsTriggerLights struct {
 	brightness float64
 	scene      map[string]any
 
-	condition        func() bool // optional: func that must return true for the automation to run
-	conditionScene   []ConditionScene
-	humanOverrideFor *time.Duration // optional: duration after which lights will turn off after being turned on from outside this system
-	sensors          []hal.EntityInterface
-	turnsOnLights    []hal.LightInterface
-	turnsOffLights   []hal.LightInterface
-	turnsOffAfter    *time.Duration // optional: duration after which lights will turn off after being turned on
+	condition              func() bool // optional: func that must return true for the automation to run
+	conditionScene         []ConditionScene
+	dimLightsBeforeTurnOff time.Duration
+	humanOverrideFor       *time.Duration // optional: duration after which lights will turn off after being turned on from outside this system
+	sensors                []hal.EntityInterface
+	turnsOnLights          []hal.LightInterface
+	turnsOffLights         []hal.LightInterface
+	turnsOffAfter          *time.Duration // optional: duration after which lights will turn off after being turned on
 
-	dimLightsTimer     *time.Timer
+	dimLightsTimer     *timerutil.Timer
 	humanOverrideTimer *timerutil.Timer
-	turnOffTimer       *time.Timer
+	turnOffTimer       *timerutil.Timer
 }
 
 func NewSensorsTriggerLights() *SensorsTriggerLights {
 	return &SensorsTriggerLights{
-		brightness: 255,
-		log:        slog.Default(),
+		dimLightsBeforeTurnOff: time.Second * 10,
+		brightness:             255,
+		log:                    slog.Default(),
 	}
 }
 
@@ -69,6 +71,14 @@ func (a *SensorsTriggerLights) WithConditionScene(condition func() bool, scene m
 		Condition: condition,
 		Scene:     scene,
 	})
+
+	return a
+}
+
+// DimLightsBeforeTurnOff sets the duration before lights will turn off after
+// being turned on.
+func (a *SensorsTriggerLights) DimLightsBeforeTurnOff(duration time.Duration) *SensorsTriggerLights {
+	a.dimLightsBeforeTurnOff = duration
 
 	return a
 }
@@ -163,17 +173,22 @@ func (a *SensorsTriggerLights) startDimLightsTimer() {
 		return
 	}
 
-	// TODO: Make this configurable
-	dimLightsAfter := *a.turnsOffAfter - 10*time.Second
+	if a.dimLightsBeforeTurnOff < 0 {
+		return
+	}
+
+	dimLightsAfter := *a.turnsOffAfter - a.dimLightsBeforeTurnOff
 	if dimLightsAfter < 1*time.Second {
 		return
 	}
 
 	if a.dimLightsTimer == nil {
-		a.dimLightsTimer = time.AfterFunc(dimLightsAfter, a.dimLights)
+		a.dimLightsTimer = timerutil.NewTimer(dimLightsAfter, a.dimLights)
 	} else {
 		a.dimLightsTimer.Reset(dimLightsAfter)
 	}
+
+	a.log.Debug("Dim lights timer set for", "time", time.Now().Add(dimLightsAfter))
 }
 
 func (a *SensorsTriggerLights) startTurnOffTimer() {
@@ -182,10 +197,12 @@ func (a *SensorsTriggerLights) startTurnOffTimer() {
 	}
 
 	if a.turnOffTimer == nil {
-		a.turnOffTimer = time.AfterFunc(*a.turnsOffAfter, a.turnOffLights)
+		a.turnOffTimer = timerutil.NewTimer(*a.turnsOffAfter, a.turnOffLights)
 	} else {
 		a.turnOffTimer.Reset(*a.turnsOffAfter)
 	}
+
+	a.log.Debug("Turn off timer set for", "time", time.Now().Add(*a.turnsOffAfter))
 
 	a.startDimLightsTimer()
 }
@@ -294,12 +311,14 @@ func (a *SensorsTriggerLights) handleSensorTriggered() {
 	}
 
 	if a.triggered() {
+		lightsWereDimmed := a.dimLightsTimer != nil && a.turnOffTimer.IsRunning()
+
 		a.stopTurnOffTimer()
 		a.stopDimLightsTimer()
 
 		// This avoids a situation where the user has changed the lights state
 		// but it gets overridden by a sensor being triggered again.
-		if a.lightsOn() {
+		if a.lightsOn() && !lightsWereDimmed {
 			a.log.Info("Sensor triggered, but lights are already on, ignoring")
 
 			return

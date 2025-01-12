@@ -1,7 +1,6 @@
 package testutil
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -12,7 +11,7 @@ const (
 )
 
 // WaitFor waits for the given function to return true.
-func WaitFor(t *testing.T, callbackFn func() bool, msg ...string) {
+func WaitFor(t *testing.T, name string, callbackFn func() bool, onFailed func()) {
 	t.Helper()
 
 	timeout := time.After(waitTimeout)
@@ -20,7 +19,9 @@ func WaitFor(t *testing.T, callbackFn func() bool, msg ...string) {
 	for {
 		select {
 		case <-timeout:
-			t.Fatal(strings.Join(msg, " "))
+			t.Errorf("assertion failed: %s", name)
+			onFailed()
+			t.FailNow()
 		default:
 			if callbackFn() {
 				return

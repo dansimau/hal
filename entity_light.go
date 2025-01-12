@@ -65,9 +65,18 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 	})
 	if err != nil {
 		slog.Error("Error turning on light", "entity", l.GetID(), "error", err)
+
+		return err
 	}
 
-	return err
+	state := l.GetState()
+	state.Update(homeassistant.State{
+		State:      "on",
+		Attributes: data,
+	})
+	l.SetState(state)
+
+	return nil
 }
 
 func (l *Light) TurnOff() error {
@@ -79,19 +88,30 @@ func (l *Light) TurnOff() error {
 
 	slog.Info("Turning off light", "entity", l.GetID())
 
+	data := map[string]any{
+		"entity_id": []string{l.GetID()},
+	}
+
 	_, err := l.connection.HomeAssistant().CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
 		Domain:  "light",
 		Service: "turn_off",
-		Data: map[string]any{
-			"entity_id": []string{l.GetID()},
-		},
+		Data:    data,
 	})
 	if err != nil {
 		slog.Error("Error turning off light", "entity", l.GetID(), "error", err)
+
+		return err
 	}
 
-	return err
+	state := l.GetState()
+	state.Update(homeassistant.State{
+		State:      "off",
+		Attributes: data,
+	})
+	l.SetState(state)
+
+	return nil
 }
 
 type LightGroup []LightInterface

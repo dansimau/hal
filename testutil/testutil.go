@@ -1,12 +1,17 @@
 package testutil
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/dansimau/hal"
 	"github.com/dansimau/hal/hassws"
 	"gotest.tools/v3/assert"
 )
+
+func init() {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
+}
 
 func NewClientServer(t *testing.T) (*hal.Connection, *hassws.Server, func()) {
 	t.Helper()

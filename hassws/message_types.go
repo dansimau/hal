@@ -26,6 +26,7 @@ type CommandMessage struct {
 }
 
 type CommandResponse struct {
+	ID      int             `json:"id"`
 	Type    MessageType     `json:"type"`
 	Success bool            `json:"success"`
 	Result  json.RawMessage `json:"result,omitempty"`
@@ -84,6 +85,7 @@ type CallServiceRequest struct {
 }
 
 type CallServiceResponse struct {
+	ID      int         `json:"id"`
 	Type    MessageType `json:"type"`
 	Success bool        `json:"success"`
 	Result  struct {
