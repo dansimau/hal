@@ -5,6 +5,7 @@ linters:
     - depguard
     - exhaustruct
     - exportloopref
+    - gochecknoinits
     - nonamedreturns
     - wrapcheck
     # Temporarily disabling while I figure out why severity settings are not working

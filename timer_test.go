@@ -10,13 +10,11 @@ import (
 func TestTimer(t *testing.T) {
 	t.Parallel()
 
-	var testStruct struct {
-		timer hal.Timer
-	}
-
 	timerRan := false
 
-	testStruct.timer.Start(func() {
+	var timer hal.Timer
+
+	timer.Start(func() {
 		timerRan = true
 	}, 100*time.Millisecond)
 

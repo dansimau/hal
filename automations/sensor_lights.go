@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/dansimau/hal"
-	"github.com/dansimau/hal/timerutil"
 )
 
 type ConditionScene struct {
@@ -38,9 +37,9 @@ type SensorsTriggerLights struct {
 	turnsOffLights         []hal.LightInterface
 	turnsOffAfter          *time.Duration // optional: duration after which lights will turn off after being turned on
 
-	dimLightsTimer     *timerutil.Timer
-	humanOverrideTimer *timerutil.Timer
-	turnOffTimer       *timerutil.Timer
+	dimLightsTimer     hal.Timer
+	humanOverrideTimer hal.Timer
+	turnOffTimer       hal.Timer
 }
 
 func NewSensorsTriggerLights() *SensorsTriggerLights {
@@ -182,12 +181,7 @@ func (a *SensorsTriggerLights) startDimLightsTimer() {
 		return
 	}
 
-	if a.dimLightsTimer == nil {
-		a.dimLightsTimer = timerutil.NewTimer(dimLightsAfter, a.dimLights)
-	} else {
-		a.dimLightsTimer.Reset(dimLightsAfter)
-	}
-
+	a.dimLightsTimer.Start(a.dimLights, dimLightsAfter)
 	a.log.Debug("Dim lights timer set for", "time", time.Now().Add(dimLightsAfter))
 }
 
@@ -196,29 +190,22 @@ func (a *SensorsTriggerLights) startTurnOffTimer() {
 		return
 	}
 
-	if a.turnOffTimer == nil {
-		a.turnOffTimer = timerutil.NewTimer(*a.turnsOffAfter, a.turnOffLights)
-	} else {
-		a.turnOffTimer.Reset(*a.turnsOffAfter)
-	}
-
+	a.turnOffTimer.Start(a.turnOffLights, *a.turnsOffAfter)
 	a.log.Debug("Turn off timer set for", "time", time.Now().Add(*a.turnsOffAfter))
 
 	a.startDimLightsTimer()
 }
 
 func (a *SensorsTriggerLights) stopTurnOffTimer() {
-	if a.turnOffTimer != nil {
-		a.turnOffTimer.Stop()
-	}
+	a.turnOffTimer.Cancel()
 }
 
 func (a *SensorsTriggerLights) stopDimLightsTimer() {
-	if a.dimLightsTimer != nil {
-		a.dimLightsTimer.Stop()
-		// TODO: Detect if the timer was actually running and if so print a log
-		// message saying we stopped the timer.
+	if a.dimLightsTimer.IsRunning() {
+		slog.Info("Cancelling dim lights timer")
 	}
+
+	a.dimLightsTimer.Cancel()
 }
 
 func (a *SensorsTriggerLights) turnOnLights() {
@@ -298,7 +285,7 @@ func (a *SensorsTriggerLights) sensorTriggered(trigger hal.EntityInterface) bool
 }
 
 func (a *SensorsTriggerLights) handleSensorTriggered() {
-	if a.humanOverrideTimer != nil && a.humanOverrideTimer.IsRunning() {
+	if a.humanOverrideTimer.IsRunning() {
 		a.log.Info("Light overridden by human, skipping")
 
 		return
@@ -311,14 +298,14 @@ func (a *SensorsTriggerLights) handleSensorTriggered() {
 	}
 
 	if a.triggered() {
-		lightsWereDimmed := a.dimLightsTimer != nil && a.turnOffTimer.IsRunning()
+		lightsWereDimmedFromTimer := a.isLightDimmedFromTimer()
 
 		a.stopTurnOffTimer()
 		a.stopDimLightsTimer()
 
 		// This avoids a situation where the user has changed the lights state
 		// but it gets overridden by a sensor being triggered again.
-		if a.lightsOn() && !lightsWereDimmed {
+		if a.lightsOn() && !lightsWereDimmedFromTimer {
 			a.log.Info("Sensor triggered, but lights are already on, ignoring")
 
 			return
@@ -341,11 +328,17 @@ func (a *SensorsTriggerLights) handleLightTriggered() {
 
 	if a.humanOverrideFor != nil {
 		if a.lightsOn() {
-			a.humanOverrideTimer.Reset(*a.humanOverrideFor)
+			slog.Info("Setting human override for", "duration", a.humanOverrideFor.String())
+			a.humanOverrideTimer.Start(nil, *a.humanOverrideFor)
 		} else {
-			a.humanOverrideTimer.Stop()
+			a.humanOverrideTimer.Cancel()
 		}
 	}
+}
+
+// isLightDimmedFromTimer returns true if the lights are dimmed from the timer.
+func (a *SensorsTriggerLights) isLightDimmedFromTimer() bool {
+	return a.dimLightsBeforeTurnOff > 0 && !a.dimLightsTimer.IsRunning() && a.turnOffTimer.IsRunning()
 }
 
 func (a *SensorsTriggerLights) Action(trigger hal.EntityInterface) {
@@ -357,7 +350,14 @@ func (a *SensorsTriggerLights) Action(trigger hal.EntityInterface) {
 }
 
 func (a *SensorsTriggerLights) Entities() hal.Entities {
-	return hal.Entities(a.sensors)
+	entities := []hal.EntityInterface{}
+	entities = append(entities, a.sensors...)
+
+	for _, light := range a.turnsOnLights {
+		entities = append(entities, light)
+	}
+
+	return hal.Entities(entities)
 }
 
 func (a *SensorsTriggerLights) Name() string {
