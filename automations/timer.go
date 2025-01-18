@@ -8,12 +8,12 @@ import (
 )
 
 type Timer struct {
-	action    func()
-	condition func() bool
-	delay     time.Duration
-	entities  hal.Entities
-	name      string
-	timer     *time.Timer
+	action     func()
+	conditions []func() bool
+	delay      time.Duration
+	entities   hal.Entities
+	name       string
+	timer      *time.Timer
 }
 
 func NewTimer(name string) *Timer {
@@ -24,7 +24,7 @@ func NewTimer(name string) *Timer {
 
 // Condition sets a condition that must be true for the timer to start.
 func (a *Timer) Condition(condition func() bool) *Timer {
-	a.condition = condition
+	a.conditions = append(a.conditions, condition)
 
 	return a
 }
@@ -76,10 +76,11 @@ func (a *Timer) Entities() hal.Entities {
 }
 
 func (a *Timer) Action(_ hal.EntityInterface) {
-	if a.condition != nil && !a.condition() {
-		slog.Info("Condition not met, not starting timer", "automation", a.name)
-
-		return
+	for i, condition := range a.conditions {
+		if !condition() {
+			slog.Info("Condition not met, not starting timer", "automation", a.name, "condition", i)
+			return
+		}
 	}
 
 	a.startTimer()
