@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/benbjohnson/clock"
 	"github.com/dansimau/hal"
 )
 
@@ -53,6 +54,15 @@ func NewSensorsTriggerLights() *SensorsTriggerLights {
 // WithBrightness sets the brightness of the lights when they are turned on.
 func (a *SensorsTriggerLights) WithBrightness(brightness float64) *SensorsTriggerLights {
 	a.brightness = brightness
+
+	return a
+}
+
+// WithClock can be used to pass in a mock clock for testing.
+func (a *SensorsTriggerLights) WithClock(c clock.Clock) *SensorsTriggerLights {
+	a.dimLightsTimer = *hal.NewTimer(c)
+	a.humanOverrideTimer = *hal.NewTimer(c)
+	a.turnOffTimer = *hal.NewTimer(c)
 
 	return a
 }

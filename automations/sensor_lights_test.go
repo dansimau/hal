@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benbjohnson/clock"
 	"github.com/dansimau/hal"
 	halautomations "github.com/dansimau/hal/automations"
 	"github.com/dansimau/hal/homeassistant"
@@ -18,6 +19,8 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 	conn, server, cleanup := testutil.NewClientServer(t)
 	defer cleanup()
 
+	mockClock := clock.NewMock()
+
 	// Create test light
 	testLight := hal.NewLight("test.light")
 	conn.RegisterEntities(testLight)
@@ -29,6 +32,7 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 	// Create automation
 	automation := halautomations.NewSensorsTriggerLights().
 		WithName("test automation").
+		WithClock(mockClock).
 		WithSensors(testSensor).
 		WithLights(testLight).
 		TurnsOffAfter(time.Second)
@@ -66,9 +70,14 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 		},
 	})
 
-	// TODO: Replace this with mocked time
-	slog.Info("Test: Sleeping")
-	time.Sleep(time.Second)
+	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
+		return testSensor.GetState().State == "off"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time")
+	mockClock.Add(2 * time.Second)
 
 	// Verify light is off
 	slog.Info("Test: Asserting light is off")
@@ -85,6 +94,7 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 	conn, server, cleanup := testutil.NewClientServer(t)
 	defer cleanup()
 
+	mockClock := clock.NewMock()
 	// Create test light
 	testLight := hal.NewLight("light.test")
 	conn.RegisterEntities(testLight)
@@ -96,6 +106,7 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 	// Create automation
 	automation := halautomations.NewSensorsTriggerLights().
 		WithName("test automation").
+		WithClock(mockClock).
 		WithSensors(testSensor).
 		WithLights(testLight).
 		WithBrightness(100).
@@ -135,9 +146,14 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 		},
 	})
 
-	// TODO: Replace this with mocked time
-	slog.Info("Test: Sleeping")
-	time.Sleep(time.Second)
+	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
+		return testSensor.GetState().State == "off"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time")
+	mockClock.Add(time.Second)
 
 	slog.Info("Test: Asserting light was dimmed")
 	testutil.WaitFor(t, "verify light was dimmed", func() bool {
@@ -146,9 +162,8 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 		spew.Dump(testLight.GetID(), testLight.GetState(), testLight.GetState().Attributes["brightness"])
 	})
 
-	// TODO: Replace this with mocked time
-	slog.Info("Test: Sleeping")
-	time.Sleep(time.Second * 2)
+	slog.Info("Test: Advancing time")
+	mockClock.Add(2 * time.Second)
 
 	// Verify light is off
 	slog.Info("Test: Asserting light is off")
@@ -165,6 +180,7 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 	conn, server, cleanup := testutil.NewClientServer(t)
 	defer cleanup()
 
+	mockClock := clock.NewMock()
 	// Create test light
 	testLight := hal.NewLight("test.light")
 	conn.RegisterEntities(testLight)
@@ -176,6 +192,7 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 	// Create automation
 	automation := halautomations.NewSensorsTriggerLights().
 		WithName("test automation").
+		WithClock(mockClock).
 		WithSensors(testSensor).
 		WithLights(testLight).
 		WithBrightness(100).
@@ -215,9 +232,14 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 		},
 	})
 
-	// TODO: Replace this with mocked time
-	slog.Info("Test: Sleeping")
-	time.Sleep(time.Second)
+	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
+		return testSensor.GetState().State == "off"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time")
+	mockClock.Add(2 * time.Second)
 
 	slog.Info("Test: Asserting light was dimmed")
 	testutil.WaitFor(t, "verify light was dimmed", func() bool {
@@ -253,6 +275,8 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 	conn, server, cleanup := testutil.NewClientServer(t)
 	defer cleanup()
 
+	mockClock := clock.NewMock()
+
 	// Create test light
 	testLight := hal.NewLight("test.light")
 	conn.RegisterEntities(testLight)
@@ -264,6 +288,7 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 	// Create automation
 	automation := halautomations.NewSensorsTriggerLights().
 		WithName("test automation").
+		WithClock(mockClock).
 		WithSensors(testSensor).
 		WithLights(testLight).
 		WithBrightness(100).
@@ -318,8 +343,14 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 		},
 	})
 
-	slog.Info("Test: Sleeping")
-	time.Sleep(time.Second)
+	testutil.WaitFor(t, "motion sensor is triggered again", func() bool {
+		return testSensor.GetState().State == "on"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time")
+	mockClock.Add(time.Second)
 
 	// Verify light is the same
 	slog.Info("Test: Asserting light is in the same state")
@@ -336,6 +367,8 @@ func TestHumanOverride(t *testing.T) {
 	conn, server, cleanup := testutil.NewClientServer(t)
 	defer cleanup()
 
+	mockClock := clock.NewMock()
+
 	// Create test light
 	testLight := hal.NewLight("test.light")
 	conn.RegisterEntities(testLight)
@@ -347,6 +380,7 @@ func TestHumanOverride(t *testing.T) {
 	// Create automation
 	automation := halautomations.NewSensorsTriggerLights().
 		WithName("test automation").
+		WithClock(mockClock).
 		WithSensors(testSensor).
 		WithLights(testLight).
 		TurnsOffAfter(time.Second).
@@ -397,8 +431,14 @@ func TestHumanOverride(t *testing.T) {
 		},
 	})
 
-	slog.Info("Test: Sleeping")
-	time.Sleep(time.Second)
+	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
+		return testSensor.GetState().State == "off"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time")
+	mockClock.Add(time.Second)
 
 	// Verify light is still on
 	slog.Info("Test: Asserting light is still on")
@@ -408,9 +448,9 @@ func TestHumanOverride(t *testing.T) {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
 
-	// Sleep until override time has expired
-	slog.Info("Test: Sleeping")
-	time.Sleep(2 * time.Second)
+	// Wait until override time has expired
+	slog.Info("Test: Advancing time")
+	mockClock.Add(2 * time.Second)
 
 	// Trigger motion sensor is triggered and cleared again
 	slog.Info("Test: Triggering motion sensor")
@@ -424,6 +464,12 @@ func TestHumanOverride(t *testing.T) {
 		},
 	})
 
+	testutil.WaitFor(t, "motion sensor is triggered", func() bool {
+		return testSensor.GetState().State == "on"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
 	slog.Info("Test: Clearing motion sensor")
 	server.SendStateChangeEvent(homeassistant.Event{
 		EventData: homeassistant.EventData{
@@ -435,8 +481,14 @@ func TestHumanOverride(t *testing.T) {
 		},
 	})
 
-	slog.Info("Test: Sleeping")
-	time.Sleep(time.Second)
+	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
+		return testSensor.GetState().State == "off"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time")
+	mockClock.Add(2 * time.Second)
 
 	// Verify light is off
 	slog.Info("Test: Asserting light is off")

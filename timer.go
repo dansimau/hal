@@ -1,11 +1,22 @@
 package hal
 
-import "time"
+import (
+	"time"
+
+	"github.com/benbjohnson/clock"
+)
 
 // Timer wraps time.Timer to add functionality for checking if the timer is running.
 type Timer struct {
-	timer   *time.Timer
+	clock   clock.Clock
+	timer   *clock.Timer
 	running bool
+}
+
+func NewTimer(clock clock.Clock) *Timer {
+	return &Timer{
+		clock: clock,
+	}
 }
 
 func (t *Timer) Cancel() {
@@ -17,16 +28,21 @@ func (t *Timer) Cancel() {
 }
 
 // Start starts the timer or resets it to a new duration.
-func (t *Timer) Start(fn func(), d time.Duration) {
+func (t *Timer) Start(fn func(), duration time.Duration) {
+	if t.clock == nil {
+		t.clock = clock.New()
+	}
+
 	if t.timer == nil {
-		t.timer = time.AfterFunc(d, func() {
+		t.timer = t.clock.AfterFunc(duration, func() {
 			t.running = false
+
 			if fn != nil {
 				fn()
 			}
 		})
 	} else {
-		t.timer.Reset(d)
+		t.timer.Reset(duration)
 	}
 
 	t.running = true
