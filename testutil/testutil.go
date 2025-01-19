@@ -37,7 +37,7 @@ func NewClientServer(t *testing.T) (*hal.Connection, *hassws.Server, func()) {
 	assert.NilError(t, err)
 
 	return conn, server, func() {
-		conn.HomeAssistant().Close()
+		conn.Close()
 		server.Close()
 	}
 }

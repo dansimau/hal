@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dansimau/hal/hassws"
@@ -23,6 +24,10 @@ type Connection struct {
 
 	automations map[string][]Automation
 	entities    map[string]EntityInterface
+
+	// Map of entity IDs to the number of expected state updates. Automations don't fire unless the expected updates are
+	// 0. This is loop protection to prevent automations from triggering themselves.
+	expectedStateUpdates map[string]*atomic.Int32
 
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
@@ -54,16 +59,28 @@ func NewConnection(cfg Config) *Connection {
 		db:            db,
 		homeAssistant: api,
 
-		automations: make(map[string][]Automation),
-		entities:    make(map[string]EntityInterface),
+		automations:          make(map[string][]Automation),
+		entities:             make(map[string]EntityInterface),
+		expectedStateUpdates: make(map[string]*atomic.Int32),
 
 		SunTimes: NewSunTimes(cfg.Location),
 	}
 }
 
-// HomeAssistant returns the underlying Home Assistant websocket client.
-func (h *Connection) HomeAssistant() *hassws.Client {
-	return h.homeAssistant
+func (h *Connection) CallService(msg hassws.CallServiceRequest) (hassws.CallServiceResponse, error) {
+	entityID := msg.Data["entity_id"]
+
+	entityIDs := getStringOrStringSlice(entityID)
+	if len(entityIDs) == 0 {
+		slog.Warn("No entity_id in call service request", "msg", msg)
+	}
+
+	for _, entityID := range entityIDs {
+		c := h.expectedStateUpdatesForEntity(entityID).Add(1)
+		slog.Info("Incremented expected state updates counter", "EntityID", entityID, "Count", c)
+	}
+
+	return h.homeAssistant.CallService(msg)
 }
 
 // FindEntities recursively finds and registers all entities in a struct, map, or slice.
@@ -98,11 +115,11 @@ func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 
 // Start connects to the Home Assistant websocket and starts listening for events.
 func (h *Connection) Start() error {
-	if err := h.HomeAssistant().Connect(); err != nil {
+	if err := h.homeAssistant.Connect(); err != nil {
 		return err
 	}
 
-	if err := h.HomeAssistant().SubscribeEvents(string(hassws.MessageTypeStateChanged), h.StateChangeEvent); err != nil {
+	if err := h.homeAssistant.SubscribeEvents(string(hassws.MessageTypeStateChanged), h.StateChangeEvent); err != nil {
 		return fmt.Errorf("failed to subscribe to state changed events: %w", err)
 	}
 
@@ -113,12 +130,24 @@ func (h *Connection) Start() error {
 	return nil
 }
 
+func (h *Connection) Close() {
+	h.homeAssistant.Close()
+}
+
+func (h *Connection) expectedStateUpdatesForEntity(entityID string) *atomic.Int32 {
+	if _, ok := h.expectedStateUpdates[entityID]; !ok {
+		h.expectedStateUpdates[entityID] = &atomic.Int32{}
+	}
+
+	return h.expectedStateUpdates[entityID]
+}
+
 func (h *Connection) syncStates() error {
 	defer perf.Timer(func(timeTaken time.Duration) {
 		slog.Info("Initial state sync complete", "duration", timeTaken)
 	})()
 
-	states, err := h.HomeAssistant().GetStates()
+	states, err := h.homeAssistant.GetStates()
 	if err != nil {
 		return err
 	}
@@ -171,6 +200,18 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		Type:  entity.GetID(),
 		State: event.Event.EventData.NewState,
 	})
+
+	// Prevent automation loops by decrementing the expected state updates counter. Note that this approach is not
+	// foolproof. If multiple state updates happen at the same time, the automation may be triggered on a state change
+	// that is not expected.
+	expectedStateUpdates := h.expectedStateUpdatesForEntity(event.Event.EventData.EntityID)
+	if expectedStateUpdates.Load() > 0 {
+		expectedStateUpdates.Add(-1)
+
+		slog.Info("Skipping automations to prevent loop", "EntityID", event.Event.EventData.EntityID)
+
+		return
+	}
 
 	// Dispatch automations
 	for _, automation := range h.automations[event.Event.EventData.EntityID] {

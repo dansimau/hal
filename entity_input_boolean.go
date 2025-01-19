@@ -42,7 +42,7 @@ func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 		}
 	}
 
-	_, err := s.connection.HomeAssistant().CallService(hassws.CallServiceRequest{
+	_, err := s.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
 		Domain:  "input_boolean",
 		Service: "turn_on",
@@ -64,7 +64,7 @@ func (s *InputBoolean) TurnOff() error {
 
 	slog.Info("Turning off virtual switch", "entity", s.GetID())
 
-	_, err := s.connection.HomeAssistant().CallService(hassws.CallServiceRequest{
+	_, err := s.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
 		Domain:  "input_boolean",
 		Service: "turn_off",

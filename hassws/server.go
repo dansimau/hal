@@ -115,6 +115,49 @@ func (s *Server) listen() {
 				Success: true,
 			})
 
+			var callServiceMessage CallServiceRequest
+			if err := json.Unmarshal(messageBytes, &callServiceMessage); err != nil {
+				panic(err)
+			}
+
+			entityIDs := []string{}
+			attributes := map[string]any{}
+
+			for _, entityID := range callServiceMessage.Data["entity_id"].([]interface{}) {
+				entityIDs = append(entityIDs, entityID.(string))
+			}
+
+			for k, v := range callServiceMessage.Data {
+				if k == "entity_id" {
+					continue
+				}
+
+				attributes[k] = v
+			}
+
+			state := ""
+
+			switch callServiceMessage.Service {
+			case "turn_on":
+				state = "on"
+			case "turn_off":
+				state = "off"
+			}
+
+			// Generate state updates
+			for _, entityID := range entityIDs {
+				s.SendStateChangeEvent(homeassistant.Event{
+					EventData: homeassistant.EventData{
+						EntityID: entityID,
+						NewState: &homeassistant.State{
+							EntityID:   entityID,
+							State:      state,
+							Attributes: attributes,
+						},
+					},
+				})
+			}
+
 		case MessageTypeSubscribeEvents:
 			s.lock.Lock()
 			s.subscribers = append(s.subscribers, cmd.ID)

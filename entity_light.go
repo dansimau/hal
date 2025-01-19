@@ -57,7 +57,7 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 		}
 	}
 
-	_, err := l.connection.HomeAssistant().CallService(hassws.CallServiceRequest{
+	_, err := l.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
 		Domain:  "light",
 		Service: "turn_on",
@@ -68,13 +68,6 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 
 		return err
 	}
-
-	state := l.GetState()
-	state.Update(homeassistant.State{
-		State:      "on",
-		Attributes: data,
-	})
-	l.SetState(state)
 
 	return nil
 }
@@ -92,7 +85,7 @@ func (l *Light) TurnOff() error {
 		"entity_id": []string{l.GetID()},
 	}
 
-	_, err := l.connection.HomeAssistant().CallService(hassws.CallServiceRequest{
+	_, err := l.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
 		Domain:  "light",
 		Service: "turn_off",
@@ -103,13 +96,6 @@ func (l *Light) TurnOff() error {
 
 		return err
 	}
-
-	state := l.GetState()
-	state.Update(homeassistant.State{
-		State:      "off",
-		Attributes: data,
-	})
-	l.SetState(state)
 
 	return nil
 }
