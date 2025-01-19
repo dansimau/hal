@@ -56,7 +56,13 @@ type EventMessage struct {
 	EventType MessageType         `json:"event_type"`
 	TimeFired string              `json:"time_fired"`
 	Origin    string              `json:"origin"`
-	Context   jsonMessage         `json:"context"`
+	Context   EventMessageContext `json:"context"`
+}
+
+type EventMessageContext struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id"`
+	UserID   string `json:"user_id"`
 }
 
 type subscribeEventsRequest struct {
@@ -85,7 +91,9 @@ type CallServiceResponse struct {
 	Type    MessageType `json:"type"`
 	Success bool        `json:"success"`
 	Result  struct {
-		Context jsonMessage `json:"context"`
+		Context struct {
+			ID string `json:"id"`
+		} `json:"context"`
 	} `json:"result"`
 	Error map[string]any `json:"error,omitempty"`
 }

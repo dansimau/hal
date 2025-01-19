@@ -276,3 +276,16 @@ func (s *Server) SendStateChangeEvent(event homeassistant.Event) {
 		})
 	}
 }
+
+// SendStateChangeEventWithContext sends a state change event to the server.
+func (s *Server) SendStateChangeEventWithContext(event homeassistant.Event, context EventMessageContext) {
+	for _, id := range s.subscribers {
+		s.SendMessage(EventMessage{
+			ID:        id,
+			Type:      MessageTypeEvent,
+			EventType: MessageTypeStateChanged,
+			Event:     event,
+			Context:   context,
+		})
+	}
+}

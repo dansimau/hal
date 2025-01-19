@@ -9,6 +9,8 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const TestUserID = "d8e8fca2dc0f896fd7cb4cb0031ba249"
+
 func init() {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 }
@@ -23,8 +25,9 @@ func NewClientServer(t *testing.T) (*hal.Connection, *hassws.Server, func()) {
 	// Create client and connection
 	conn := hal.NewConnection(hal.Config{
 		HomeAssistant: hal.HomeAssistantConfig{
-			Host:  server.ListenAddress(),
-			Token: "test-token",
+			Host:   server.ListenAddress(),
+			Token:  "test-token",
+			UserID: TestUserID,
 		},
 	})
 

@@ -15,8 +15,9 @@ type Config struct {
 }
 
 type HomeAssistantConfig struct {
-	Host  string `yaml:"host"`
-	Token string `yaml:"token"`
+	Host   string `yaml:"host"`
+	Token  string `yaml:"token"`
+	UserID string `yaml:"userId"`
 }
 
 type LocationConfig struct {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/dansimau/hal/hassws"
@@ -24,10 +23,6 @@ type Connection struct {
 
 	automations map[string][]Automation
 	entities    map[string]EntityInterface
-
-	// Map of entity IDs to the number of expected state updates. Automations don't fire unless the expected updates are
-	// 0. This is loop protection to prevent automations from triggering themselves.
-	expectedStateUpdates map[string]*atomic.Int32
 
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
@@ -59,27 +54,14 @@ func NewConnection(cfg Config) *Connection {
 		db:            db,
 		homeAssistant: api,
 
-		automations:          make(map[string][]Automation),
-		entities:             make(map[string]EntityInterface),
-		expectedStateUpdates: make(map[string]*atomic.Int32),
+		automations: make(map[string][]Automation),
+		entities:    make(map[string]EntityInterface),
 
 		SunTimes: NewSunTimes(cfg.Location),
 	}
 }
 
 func (h *Connection) CallService(msg hassws.CallServiceRequest) (hassws.CallServiceResponse, error) {
-	entityID := msg.Data["entity_id"]
-
-	entityIDs := getStringOrStringSlice(entityID)
-	if len(entityIDs) == 0 {
-		slog.Warn("No entity_id in call service request", "msg", msg)
-	}
-
-	for _, entityID := range entityIDs {
-		c := h.expectedStateUpdatesForEntity(entityID).Add(1)
-		slog.Info("Incremented expected state updates counter", "EntityID", entityID, "Count", c)
-	}
-
 	return h.homeAssistant.CallService(msg)
 }
 
@@ -132,14 +114,6 @@ func (h *Connection) Start() error {
 
 func (h *Connection) Close() {
 	h.homeAssistant.Close()
-}
-
-func (h *Connection) expectedStateUpdatesForEntity(entityID string) *atomic.Int32 {
-	if _, ok := h.expectedStateUpdates[entityID]; !ok {
-		h.expectedStateUpdates[entityID] = &atomic.Int32{}
-	}
-
-	return h.expectedStateUpdates[entityID]
 }
 
 func (h *Connection) syncStates() error {
@@ -201,14 +175,9 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		State: event.Event.EventData.NewState,
 	})
 
-	// Prevent automation loops by decrementing the expected state updates counter. Note that this approach is not
-	// foolproof. If multiple state updates happen at the same time, the automation may be triggered on a state change
-	// that is not expected.
-	expectedStateUpdates := h.expectedStateUpdatesForEntity(event.Event.EventData.EntityID)
-	if expectedStateUpdates.Load() > 0 {
-		expectedStateUpdates.Add(-1)
-
-		slog.Info("Skipping automations to prevent loop", "EntityID", event.Event.EventData.EntityID)
+	// Prevent loops by not running automations that originate from hal
+	if event.Context.UserID == h.config.HomeAssistant.UserID {
+		slog.Debug("Skipping automation to prevent loop", "EntityID", event.Event.EventData.EntityID)
 
 		return
 	}
