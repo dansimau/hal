@@ -146,7 +146,7 @@ func (s *Server) listen() {
 
 			// Generate state updates
 			for _, entityID := range entityIDs {
-				s.SendStateChangeEvent(homeassistant.Event{
+				s.SendEvent(homeassistant.Event{
 					EventData: homeassistant.EventData{
 						EntityID: entityID,
 						NewState: &homeassistant.State{
@@ -265,27 +265,13 @@ func (s *Server) MessagesSent() [][]byte {
 	return s.messagesSent
 }
 
-// SendStateChangeEvent sends a state change event to the server.
-func (s *Server) SendStateChangeEvent(event homeassistant.Event) {
+// SendEvent sends a state change event to the server.
+func (s *Server) SendEvent(event homeassistant.Event) {
 	for _, id := range s.subscribers {
 		s.SendMessage(EventMessage{
-			ID:        id,
-			Type:      MessageTypeEvent,
-			EventType: MessageTypeStateChanged,
-			Event:     event,
-		})
-	}
-}
-
-// SendStateChangeEventWithContext sends a state change event to the server.
-func (s *Server) SendStateChangeEventWithContext(event homeassistant.Event, context EventMessageContext) {
-	for _, id := range s.subscribers {
-		s.SendMessage(EventMessage{
-			ID:        id,
-			Type:      MessageTypeEvent,
-			EventType: MessageTypeStateChanged,
-			Event:     event,
-			Context:   context,
+			ID:    id,
+			Type:  MessageTypeEvent,
+			Event: event,
 		})
 	}
 }

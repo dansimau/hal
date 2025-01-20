@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/dansimau/hal"
-	"github.com/dansimau/hal/hassws"
 	"github.com/dansimau/hal/homeassistant"
 	"github.com/dansimau/hal/testutil"
 	"github.com/davecgh/go-spew/spew"
@@ -22,7 +21,8 @@ func TestConnection(t *testing.T) {
 	conn.RegisterEntities(entity)
 
 	// Send state change event
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: "test.entity",
 			NewState: &homeassistant.State{State: "on"},
@@ -57,17 +57,20 @@ func TestLoopProtection(t *testing.T) {
 	)
 
 	// This one should be ignored because it is from the same user
-	server.SendStateChangeEventWithContext(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: "test.entity",
 			NewState: &homeassistant.State{State: "off"},
 		},
-	}, hassws.EventMessageContext{
-		UserID: testutil.TestUserID,
+		Context: homeassistant.EventMessageContext{
+			UserID: testutil.TestUserID,
+		},
 	})
 
 	// This one should cause the automation to be triggered
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: "test.entity",
 			NewState: &homeassistant.State{State: "on"},

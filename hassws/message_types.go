@@ -50,19 +50,9 @@ type AuthResponse struct {
 }
 
 type EventMessage struct {
-	ID        int                 `json:"id"`
-	Type      MessageType         `json:"type"` // "event"
-	Event     homeassistant.Event `json:"event"`
-	EventType MessageType         `json:"event_type"`
-	TimeFired string              `json:"time_fired"`
-	Origin    string              `json:"origin"`
-	Context   EventMessageContext `json:"context"`
-}
-
-type EventMessageContext struct {
-	ID       string `json:"id"`
-	ParentID string `json:"parent_id"`
-	UserID   string `json:"user_id"`
+	ID    int                 `json:"id"`
+	Type  MessageType         `json:"type"` // "event"
+	Event homeassistant.Event `json:"event"`
 }
 
 type subscribeEventsRequest struct {

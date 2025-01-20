@@ -41,7 +41,8 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -60,7 +61,8 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 
 	// Clear motion sensor
 	slog.Info("Test: Clearing motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -117,7 +119,8 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -136,7 +139,8 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 
 	// Clear motion sensor
 	slog.Info("Test: Clearing motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -203,7 +207,8 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -222,7 +227,8 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 
 	// Clear motion sensor
 	slog.Info("Test: Clearing motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -250,7 +256,8 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 
 	// Trigger motion sensor again
 	slog.Info("Test: Triggering motion sensor again")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -299,7 +306,8 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -318,7 +326,8 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 
 	// Light was dimmed manually
 	slog.Info("Test: Dimming light manually")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testLight.GetID(),
 			NewState: &homeassistant.State{
@@ -333,7 +342,8 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor again")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -390,7 +400,8 @@ func TestHumanOverride(t *testing.T) {
 
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -409,7 +420,8 @@ func TestHumanOverride(t *testing.T) {
 
 	// Human presses button manually, triggering human override
 	slog.Info("Test: Light set manually")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testLight.GetID(),
 			NewState: &homeassistant.State{
@@ -421,7 +433,8 @@ func TestHumanOverride(t *testing.T) {
 
 	// Motion sensor is cleared, but it should be ignored because of human override
 	slog.Info("Test: Clearing motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -454,7 +467,8 @@ func TestHumanOverride(t *testing.T) {
 
 	// Trigger motion sensor is triggered and cleared again
 	slog.Info("Test: Triggering motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -471,7 +485,8 @@ func TestHumanOverride(t *testing.T) {
 	})
 
 	slog.Info("Test: Clearing motion sensor")
-	server.SendStateChangeEvent(homeassistant.Event{
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{

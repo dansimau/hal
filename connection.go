@@ -176,8 +176,8 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	})
 
 	// Prevent loops by not running automations that originate from hal
-	if event.Context.UserID == h.config.HomeAssistant.UserID {
-		slog.Debug("Skipping automation to prevent loop", "EntityID", event.Event.EventData.EntityID)
+	if event.Event.Context.UserID == h.config.HomeAssistant.UserID {
+		slog.Debug("Skipping automation from own action", "EntityID", event.Event.EventData.EntityID)
 
 		return
 	}
