@@ -162,7 +162,9 @@ func (lg LightGroup) TurnOn(attributes ...map[string]any) error {
 		}
 	}
 
-	if len(errs) > 1 {
+	if len(errs) == 1 {
+		return errs[0]
+	} else if len(errs) > 1 {
 		return errors.Join(errs...)
 	}
 
@@ -178,7 +180,9 @@ func (lg LightGroup) TurnOff() error {
 		}
 	}
 
-	if len(errs) > 1 {
+	if len(errs) == 1 {
+		return errs[0]
+	} else if len(errs) > 1 {
 		return errors.Join(errs...)
 	}
 
