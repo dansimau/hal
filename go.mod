@@ -7,6 +7,7 @@ require github.com/davecgh/go-spew v1.1.1
 require (
 	github.com/benbjohnson/clock v1.3.5
 	github.com/glebarez/sqlite v1.11.0
+	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/nathan-osman/go-sunrise v1.1.0
 	gopkg.in/yaml.v3 v3.0.1
