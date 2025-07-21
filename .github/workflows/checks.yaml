@@ -19,7 +19,10 @@ jobs:
           go-version: "1.21"
 
       - name: Run tests
-        run: go test -json ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./... | tee test-results.json | python3 testutil/colourise-go-test-output.py
+        run: |
+          set -o pipefail
+          go test -json ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./... | tee test-results.json | python3 testutil/colourise-go-test-output.py
+        shell: bash
 
       - name: Annotate
         if: always()
