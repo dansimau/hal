@@ -40,7 +40,12 @@ type ConnectionBinder interface {
 }
 
 func NewConnection(cfg Config) *Connection {
-	db, err := store.Open("sqlite.db")
+	dbPath := cfg.DatabasePath
+	if dbPath == "" {
+		dbPath = "sqlite.db"
+	}
+
+	db, err := store.Open(dbPath)
 	if err != nil {
 		panic(err)
 	}
