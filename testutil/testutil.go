@@ -18,8 +18,11 @@ func init() {
 func NewClientServer(t *testing.T) (*hal.Connection, *hassws.Server, func()) {
 	t.Helper()
 
-	// Create test server
-	server, err := hassws.NewServer()
+	// Create test server with valid users map
+	validUsers := map[string]string{
+		"test-token": TestUserID,
+	}
+	server, err := hassws.NewServer(validUsers)
 	assert.NilError(t, err)
 
 	// Create client and connection
