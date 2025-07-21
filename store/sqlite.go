@@ -12,8 +12,12 @@ func Open(path string) (*gorm.DB, error) {
 	}
 
 	// Set PRAGMA statements to improve SQLite performance
-	db.Exec("PRAGMA journal_mode = WAL;")
-	db.Exec("PRAGMA synchronous = NORMAL;")
+	if err := db.Exec("PRAGMA journal_mode = WAL;").Error; err != nil {
+		return nil, err
+	}
+	if err := db.Exec("PRAGMA synchronous = NORMAL;").Error; err != nil {
+		return nil, err
+	}
 
 	if err := db.AutoMigrate(&Entity{}); err != nil {
 		return nil, err
