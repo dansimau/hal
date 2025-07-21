@@ -4,7 +4,9 @@
       "Bash(make test:*)",
       "Bash(go tool cover:*)",
       "Bash(go test:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(make lint:*)",
+      "Bash(golangci-lint run:*)"
     ],
     "deny": []
   }

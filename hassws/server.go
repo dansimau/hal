@@ -28,14 +28,20 @@ type Server struct {
 	// Subscribers is a list of message IDs that initiated a subscription.
 	subscribers []int
 
+	// validUsers maps auth tokens to user IDs
+	validUsers map[string]string
+	// authenticatedUserID stores the user ID of the authenticated client
+	authenticatedUserID string
+
 	lock sync.RWMutex
 }
 
-func NewServer() (*Server, error) {
+func NewServer(validUsers map[string]string) (*Server, error) {
 	server := &Server{
 		http: &http.Server{
 			ReadHeaderTimeout: readHeaderTimeoutSeconds * time.Second,
 		},
+		validUsers: validUsers,
 	}
 
 	server.http.Handler = http.HandlerFunc(server.handler)
@@ -147,6 +153,9 @@ func (s *Server) listen() {
 			// Generate state updates
 			for _, entityID := range entityIDs {
 				s.SendEvent(homeassistant.Event{
+					Context: homeassistant.EventMessageContext{
+						UserID: s.authenticatedUserID,
+					},
 					EventData: homeassistant.EventData{
 						EntityID: entityID,
 						NewState: &homeassistant.State{
@@ -201,7 +210,20 @@ func (s *Server) handleAuthentication(conn *websocket.Conn) error {
 		return err
 	}
 
-	// Accept any token
+	// Validate token against valid users map
+	userID, valid := s.validUsers[authReq.AccessToken]
+	if !valid {
+		authResp := AuthResponse{
+			Type:      "auth_invalid",
+			Message:   "Invalid access token",
+			HAVersion: "2024.1.0",
+		}
+		return conn.WriteJSON(authResp)
+	}
+
+	// Store authenticated user ID
+	s.authenticatedUserID = userID
+
 	authResp := AuthResponse{
 		Type:      "auth_ok",
 		HAVersion: "2024.1.0",
