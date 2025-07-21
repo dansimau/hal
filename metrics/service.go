@@ -87,8 +87,17 @@ func (s *Service) collectMetrics() {
 	for {
 		select {
 		case <-s.stopChan:
-			s.flushBuffer()
-			return
+			// Drain remaining metrics from channel before flushing
+			for {
+				select {
+				case metric := <-s.bufferChan:
+					s.metricsBuffer = append(s.metricsBuffer, metric)
+				default:
+					// No more metrics in channel
+					s.flushBuffer()
+					return
+				}
+			}
 		case metric := <-s.bufferChan:
 			s.metricsBuffer = append(s.metricsBuffer, metric)
 			if len(s.metricsBuffer) >= s.batchSize {

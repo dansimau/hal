@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dansimau/hal/store"
+	"github.com/spf13/cobra"
 	"gorm.io/gorm"
 )
 
@@ -33,9 +34,30 @@ var timePeriods = []TimePeriod{
 	{"Last Month", 30 * 24 * time.Hour},
 }
 
-func RunStatsCommand(args ...string) error {
+// NewStatsCmd creates the stats command
+func NewStatsCmd() *cobra.Command {
+	var dbPath string
+
+	cmd := &cobra.Command{
+		Use:     "stats",
+		Aliases: []string{"stat"},
+		Short:   "Display HAL metrics statistics",
+		Long: `Display comprehensive metrics statistics for HAL automation system.
+Shows automation triggers, evaluations, and processing times across multiple time periods.`,
+		Example: `  hal stats                    # Show stats using default database
+  hal stats --db custom.db     # Show stats from custom database`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStatsCommand(dbPath)
+		},
+	}
+
+	cmd.Flags().StringVar(&dbPath, "db", "sqlite.db", "Database file path")
+	return cmd
+}
+
+func runStatsCommand(dbPath string) error {
 	// Open database connection
-	db, err := store.Open("sqlite.db")
+	db, err := store.Open(dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
