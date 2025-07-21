@@ -3,13 +3,14 @@ package hal
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/dansimau/hal/hassws"
 	"github.com/dansimau/hal/perf"
 	"github.com/dansimau/hal/store"
-	"github.com/davecgh/go-spew/spew"
+	"github.com/google/go-cmp/cmp"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -159,8 +160,9 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 
 	slog.Debug("State changed for",
 		"EntityID", event.Event.EventData.EntityID,
-		"NewState", spew.Sdump(event.Event.EventData.NewState),
 	)
+
+	fmt.Fprintf(os.Stderr, "Diff:\n%s\n", cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
 
 	if event.Event.EventData.NewState != nil {
 		entity.SetState(*event.Event.EventData.NewState)

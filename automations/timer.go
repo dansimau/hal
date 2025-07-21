@@ -61,6 +61,13 @@ func (a *Timer) startTimer() {
 	}
 }
 
+// stopTimer stops the timer.
+func (a *Timer) stopTimer() {
+	if a.timer != nil {
+		a.timer.Stop()
+	}
+}
+
 func (a *Timer) runAction() {
 	slog.Info("Timer elapsed, executing action", "automation", a.name)
 
@@ -78,7 +85,8 @@ func (a *Timer) Entities() hal.Entities {
 func (a *Timer) Action(_ hal.EntityInterface) {
 	for i, condition := range a.conditions {
 		if !condition() {
-			slog.Info("Condition not met, not starting timer", "automation", a.name, "condition", i)
+			slog.Info("Timer condition not met, stopping existing timer", "automation", a.name, "condition", i)
+			a.stopTimer()
 			return
 		}
 	}
