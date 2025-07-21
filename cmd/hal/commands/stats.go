@@ -15,7 +15,7 @@ import (
 )
 
 type MetricSummary struct {
-	MetricType string
+	MetricType store.MetricType
 	LastMinute interface{}
 	LastHour   interface{}
 	LastDay    interface{}
@@ -63,7 +63,7 @@ func runStatsCommand(dbPath string) error {
 	}
 
 	// Get stats for all metric types
-	metricTypes := []string{
+	metricTypes := []store.MetricType{
 		store.MetricTypeAutomationTriggered,
 		store.MetricTypeAutomationEvaluated,
 		store.MetricTypeTickProcessingTime,
@@ -74,7 +74,7 @@ func runStatsCommand(dbPath string) error {
 	for _, metricType := range metricTypes {
 		summary := MetricSummary{MetricType: metricType}
 
-		if strings.Contains(metricType, "time") {
+		if strings.Contains(string(metricType), "time") {
 			// Timer metrics - calculate p99
 			summary.LastMinute = calculateP99(db, metricType, time.Minute)
 			summary.LastHour = calculateP99(db, metricType, time.Hour)
@@ -95,7 +95,7 @@ func runStatsCommand(dbPath string) error {
 	return printTable(summaries)
 }
 
-func sumMetrics(db *gorm.DB, metricType string, duration time.Duration) int64 {
+func sumMetrics(db *gorm.DB, metricType store.MetricType, duration time.Duration) int64 {
 	since := time.Now().Add(-duration)
 	var result struct {
 		Total int64
@@ -109,7 +109,7 @@ func sumMetrics(db *gorm.DB, metricType string, duration time.Duration) int64 {
 	return result.Total
 }
 
-func calculateP99(db *gorm.DB, metricType string, duration time.Duration) string {
+func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Duration) string {
 	since := time.Now().Add(-duration)
 	var values []int64
 
@@ -148,7 +148,7 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-func formatMetricType(metricType string) string {
+func formatMetricType(metricType store.MetricType) string {
 	switch metricType {
 	case store.MetricTypeAutomationTriggered:
 		return "Automations Triggered"
@@ -157,7 +157,7 @@ func formatMetricType(metricType string) string {
 	case store.MetricTypeTickProcessingTime:
 		return "Tick Processing Time (p99)"
 	default:
-		return metricType
+		return string(metricType)
 	}
 }
 

@@ -19,19 +19,22 @@ type Entity struct {
 	State *homeassistant.State `gorm:"serializer:json"`
 }
 
-// Metric represents a single metric data point
-type Metric struct {
-	ID               uint      `gorm:"primaryKey;autoIncrement"`
-	Timestamp        time.Time `gorm:"index;not null"`
-	MetricType       string    `gorm:"not null;size:50"`
-	Value            int64     `gorm:"not null"`           // For counters: 1, for timers: nanoseconds
-	EntityID         string    `gorm:"size:100"`           // Optional: which entity triggered this
-	AutomationName   string    `gorm:"size:100"`           // Optional: which automation was involved
-}
+// MetricType represents the type of metric being recorded
+type MetricType string
 
 // MetricType constants
 const (
-	MetricTypeAutomationTriggered  = "automation_triggered"
-	MetricTypeAutomationEvaluated  = "automation_evaluated"
-	MetricTypeTickProcessingTime   = "tick_processing_time"
+	MetricTypeAutomationTriggered  MetricType = "automation_triggered"
+	MetricTypeAutomationEvaluated  MetricType = "automation_evaluated"
+	MetricTypeTickProcessingTime   MetricType = "tick_processing_time"
 )
+
+// Metric represents a single metric data point
+type Metric struct {
+	ID               uint       `gorm:"primaryKey;autoIncrement"`
+	Timestamp        time.Time  `gorm:"index;not null"`
+	MetricType       MetricType `gorm:"not null;size:50"`
+	Value            int64      `gorm:"not null"`           // For counters: 1, for timers: nanoseconds
+	EntityID         string     `gorm:"size:100"`           // Optional: which entity triggered this
+	AutomationName   string     `gorm:"size:100"`           // Optional: which automation was involved
+}

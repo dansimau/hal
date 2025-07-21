@@ -181,13 +181,13 @@ func TestFormatDuration(t *testing.T) {
 
 func TestFormatMetricType(t *testing.T) {
 	testCases := []struct {
-		metricType string
+		metricType store.MetricType
 		expected   string
 	}{
 		{store.MetricTypeAutomationTriggered, "Automations Triggered"},
 		{store.MetricTypeAutomationEvaluated, "Automations Evaluated"},
 		{store.MetricTypeTickProcessingTime, "Tick Processing Time (p99)"},
-		{"unknown_metric", "unknown_metric"},
+		{store.MetricType("unknown_metric"), "unknown_metric"},
 	}
 	
 	for _, tc := range testCases {

@@ -30,26 +30,16 @@ func TestNewService(t *testing.T) {
 	service := NewService(db)
 	
 	assert.Assert(t, service != nil)
-	assert.Equal(t, service.batchSize, 100)
 	assert.Equal(t, service.pruneInterval, 24*time.Hour)
-	assert.Equal(t, service.retentionTime, 30*24*time.Hour)
+	assert.Equal(t, service.retentionTime, 90*24*time.Hour) // 3 months
 }
 
 func TestRecordCounter(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
 	
-	// Test by directly adding to buffer and flushing (synchronous)
-	metric := store.Metric{
-		Timestamp:      time.Now(),
-		MetricType:     store.MetricTypeAutomationTriggered,
-		Value:          1,
-		EntityID:       "test.entity",
-		AutomationName: "test automation",
-	}
-	
-	service.metricsBuffer = append(service.metricsBuffer, metric)
-	service.flushBuffer()
+	// Record a counter metric (writes directly to database)
+	service.RecordCounter(store.MetricTypeAutomationTriggered, "test.entity", "test automation")
 	
 	// Verify metric was recorded
 	var metrics []store.Metric
@@ -65,62 +55,20 @@ func TestRecordCounter(t *testing.T) {
 	assert.Assert(t, !savedMetric.Timestamp.IsZero())
 }
 
-func TestRecordCounterAsync(t *testing.T) {
-	db := setupTestDB(t)
-	service := NewService(db)
-	
-	// Start the service to enable background processing
-	service.Start()
-	defer service.Stop()
-	
-	// Record a counter metric through the async channel
-	service.RecordCounter(store.MetricTypeAutomationTriggered, "test.entity", "test automation")
-	
-	// Wait for background processing with a retry loop
-	var metrics []store.Metric
-	for i := 0; i < 50; i++ { // Try for up to 5 seconds
-		db.Find(&metrics)
-		if len(metrics) > 0 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	
-	// Verify metric was recorded
-	assert.Assert(t, len(metrics) >= 1, "Expected at least 1 metric, got %d", len(metrics))
-	
-	metric := metrics[0]
-	assert.Equal(t, metric.MetricType, store.MetricTypeAutomationTriggered)
-	assert.Equal(t, metric.Value, int64(1))
-	assert.Equal(t, metric.EntityID, "test.entity")
-	assert.Equal(t, metric.AutomationName, "test automation")
-}
-
 func TestRecordTimer(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
 	
-	// Start the service to enable background processing
-	service.Start()
-	defer service.Stop()
-	
 	duration := 150 * time.Millisecond
 	
-	// Record a timer metric
+	// Record a timer metric (writes directly to database)
 	service.RecordTimer(store.MetricTypeTickProcessingTime, duration, "test.entity", "")
 	
-	// Wait for background processing with retry logic
-	var metrics []store.Metric
-	for i := 0; i < 20; i++ {
-		db.Find(&metrics)
-		if len(metrics) > 0 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	
 	// Verify metric was recorded
-	assert.Assert(t, len(metrics) >= 1, "Expected at least 1 metric, got %d", len(metrics))
+	var metrics []store.Metric
+	result := db.Find(&metrics)
+	assert.NilError(t, result.Error)
+	assert.Equal(t, len(metrics), 1)
 	
 	metric := metrics[0]
 	assert.Equal(t, metric.MetricType, store.MetricTypeTickProcessingTime)
@@ -129,24 +77,16 @@ func TestRecordTimer(t *testing.T) {
 	assert.Equal(t, metric.AutomationName, "")
 }
 
-func TestBatchingBehavior(t *testing.T) {
+func TestMultipleMetrics(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
-	service.batchSize = 3 // Small batch size for testing
 	
-	// Start the service to enable background processing
-	service.Start()
-	defer service.Stop()
-	
-	// Record multiple metrics
+	// Record multiple metrics (writes directly to database)
 	service.RecordCounter(store.MetricTypeAutomationTriggered, "entity1", "automation1")
 	service.RecordCounter(store.MetricTypeAutomationTriggered, "entity2", "automation2")
 	service.RecordCounter(store.MetricTypeAutomationTriggered, "entity3", "automation3")
 	
-	// Wait for background processing - should trigger batch flush
-	time.Sleep(50 * time.Millisecond)
-	
-	// Should be flushed now
+	// Verify all metrics were recorded
 	var count int64
 	db.Model(&store.Metric{}).Count(&count)
 	assert.Equal(t, count, int64(3))
@@ -156,9 +96,9 @@ func TestPruneOldMetrics(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
 	
-	// Create old and new metrics
-	oldTime := time.Now().Add(-45 * 24 * time.Hour) // 45 days old
-	newTime := time.Now().Add(-1 * time.Hour)       // 1 hour old
+	// Create old and new metrics (100 days old vs 1 hour old)
+	oldTime := time.Now().Add(-100 * 24 * time.Hour) // 100 days old (older than 90 day retention)
+	newTime := time.Now().Add(-1 * time.Hour)        // 1 hour old
 	
 	oldMetric := store.Metric{
 		Timestamp:  oldTime,
@@ -181,8 +121,7 @@ func TestPruneOldMetrics(t *testing.T) {
 	db.Model(&store.Metric{}).Count(&count)
 	assert.Equal(t, count, int64(2))
 	
-	// Manually trigger pruning with a short retention time
-	service.retentionTime = 30 * 24 * time.Hour // 30 days
+	// Manually trigger pruning with the default retention time (90 days)
 	cutoffTime := time.Now().Add(-service.retentionTime)
 	result := db.Where("timestamp < ?", cutoffTime).Delete(&store.Metric{})
 	assert.NilError(t, result.Error)
@@ -204,41 +143,10 @@ func TestServiceStartStop(t *testing.T) {
 	// Test that service can start and stop cleanly
 	service.Start()
 	
-	// Just test basic lifecycle, don't test flushing behavior here
-	// (that's tested in other tests)
+	// Brief pause to let pruning goroutine start
 	time.Sleep(10 * time.Millisecond)
 	
 	service.Stop()
 	
 	// Verify no errors occurred (success is just clean start/stop)
-}
-
-func TestBufferOverflow(t *testing.T) {
-	db := setupTestDB(t)
-	service := NewService(db)
-	
-	// Make buffer very small for testing
-	service.bufferChan = make(chan store.Metric, 2)
-	
-	// Start the service to enable background processing
-	service.Start()
-	defer service.Stop()
-	
-	// Fill buffer beyond capacity
-	service.RecordCounter("test1", "entity1", "")
-	service.RecordCounter("test2", "entity2", "")
-	service.RecordCounter("test3", "entity3", "") // This should be dropped
-	
-	// Wait for background processing with retry
-	var count int64
-	for i := 0; i < 20; i++ {
-		result := db.Model(&store.Metric{}).Count(&count)
-		assert.NilError(t, result.Error)
-		if count >= 2 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	
-	assert.Equal(t, count, int64(2))
 }
