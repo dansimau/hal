@@ -1,3 +1,9 @@
+# Binaries
+hal
+
+# Test coverage
 cover.out
+
+# Databases
 sqlite.db*
 test-results.json
