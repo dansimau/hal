@@ -32,6 +32,7 @@ func NewClientServer(t *testing.T) (*hal.Connection, *hassws.Server, func()) {
 			Token:  "test-token",
 			UserID: TestUserID,
 		},
+		DatabasePath: ":memory:",
 	})
 
 	// Create test entity and register it

@@ -12,6 +12,7 @@ const configFilename = "hal.yaml"
 type Config struct {
 	HomeAssistant HomeAssistantConfig `yaml:"homeAssistant"`
 	Location      LocationConfig      `yaml:"location"`
+	DatabasePath  string              `yaml:"databasePath"`
 }
 
 type HomeAssistantConfig struct {
