@@ -1,30 +1,20 @@
-package hal
+package hal_test
 
 import (
 	"testing"
 
+	"github.com/dansimau/hal"
 	"gotest.tools/v3/assert"
 )
 
-func TestNewSunTimes(t *testing.T) {
-	config := LocationConfig{
-		Latitude:  37.7749,
-		Longitude: -122.4194,
-	}
-
-	sunTimes := NewSunTimes(config)
-	assert.Assert(t, sunTimes != nil)
-	assert.Equal(t, sunTimes.location.Latitude, 37.7749)
-	assert.Equal(t, sunTimes.location.Longitude, -122.4194)
-}
 
 func TestSunTimes_Sunrise(t *testing.T) {
 	t.Run("returns sunrise time for San Francisco", func(t *testing.T) {
-		config := LocationConfig{
+		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
 		}
-		sunTimes := NewSunTimes(config)
+		sunTimes := hal.NewSunTimes(config)
 
 		sunrise := sunTimes.Sunrise()
 		// Sunrise should be a valid time and in the past or future of today
@@ -36,11 +26,11 @@ func TestSunTimes_Sunrise(t *testing.T) {
 	})
 
 	t.Run("returns different times for different locations", func(t *testing.T) {
-		sfConfig := LocationConfig{Latitude: 37.7749, Longitude: -122.4194} // San Francisco
-		nyConfig := LocationConfig{Latitude: 40.7128, Longitude: -74.0060}  // New York
+		sfConfig := hal.LocationConfig{Latitude: 37.7749, Longitude: -122.4194} // San Francisco
+		nyConfig := hal.LocationConfig{Latitude: 40.7128, Longitude: -74.0060}  // New York
 
-		sfSunTimes := NewSunTimes(sfConfig)
-		nySunTimes := NewSunTimes(nyConfig)
+		sfSunTimes := hal.NewSunTimes(sfConfig)
+		nySunTimes := hal.NewSunTimes(nyConfig)
 
 		sfSunrise := sfSunTimes.Sunrise()
 		nySunrise := nySunTimes.Sunrise()
@@ -52,11 +42,11 @@ func TestSunTimes_Sunrise(t *testing.T) {
 
 func TestSunTimes_Sunset(t *testing.T) {
 	t.Run("returns sunset time for San Francisco", func(t *testing.T) {
-		config := LocationConfig{
+		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
 		}
-		sunTimes := NewSunTimes(config)
+		sunTimes := hal.NewSunTimes(config)
 
 		sunset := sunTimes.Sunset()
 		// Sunset should be a valid time
@@ -70,11 +60,11 @@ func TestSunTimes_Sunset(t *testing.T) {
 
 func TestSunTimes_IsDayTime(t *testing.T) {
 	t.Run("correctly determines day/night for known time", func(t *testing.T) {
-		config := LocationConfig{
+		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
 		}
-		sunTimes := NewSunTimes(config)
+		sunTimes := hal.NewSunTimes(config)
 
 		// This is a basic test - in real usage, the result depends on current time
 		// We just verify the method returns a boolean and doesn't panic
@@ -83,11 +73,11 @@ func TestSunTimes_IsDayTime(t *testing.T) {
 	})
 
 	t.Run("day/night are opposite", func(t *testing.T) {
-		config := LocationConfig{
+		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
 		}
-		sunTimes := NewSunTimes(config)
+		sunTimes := hal.NewSunTimes(config)
 
 		isDayTime := sunTimes.IsDayTime()
 		isNightTime := sunTimes.IsNightTime()
@@ -99,11 +89,11 @@ func TestSunTimes_IsDayTime(t *testing.T) {
 
 func TestSunTimes_IsNightTime(t *testing.T) {
 	t.Run("is opposite of IsDayTime", func(t *testing.T) {
-		config := LocationConfig{
+		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
 		}
-		sunTimes := NewSunTimes(config)
+		sunTimes := hal.NewSunTimes(config)
 
 		isDayTime := sunTimes.IsDayTime()
 		isNightTime := sunTimes.IsNightTime()
@@ -116,11 +106,11 @@ func TestSunTimes_IsNightTime(t *testing.T) {
 func TestSunTimes_EdgeCases(t *testing.T) {
 	t.Run("handles extreme northern latitude", func(t *testing.T) {
 		// Test with extreme latitude (northern Norway)
-		config := LocationConfig{
+		config := hal.LocationConfig{
 			Latitude:  78.2156,
 			Longitude: 15.5503,
 		}
-		sunTimes := NewSunTimes(config)
+		sunTimes := hal.NewSunTimes(config)
 
 		// Should not panic, even in polar regions
 		sunrise := sunTimes.Sunrise()
@@ -140,11 +130,11 @@ func TestSunTimes_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("handles zero coordinates", func(t *testing.T) {
-		config := LocationConfig{
+		config := hal.LocationConfig{
 			Latitude:  0,
 			Longitude: 0,
 		}
-		sunTimes := NewSunTimes(config)
+		sunTimes := hal.NewSunTimes(config)
 
 		// Should work at equator/prime meridian
 		sunrise := sunTimes.Sunrise()

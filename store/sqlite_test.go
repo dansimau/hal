@@ -1,8 +1,10 @@
-package store
+package store_test
 
 import (
 	"os"
 	"testing"
+
+	"github.com/dansimau/hal/store"
 )
 
 func TestSQLitePragmaConfiguration(t *testing.T) {
@@ -11,7 +13,7 @@ func TestSQLitePragmaConfiguration(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Test opening database with PRAGMA settings
-	db, err := Open(tmpFile)
+	db, err := store.Open(tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
