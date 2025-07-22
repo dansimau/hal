@@ -10,7 +10,7 @@ func TestGetShortFunctionName(t *testing.T) {
 	t.Run("extracts function name from function reference", func(t *testing.T) {
 		testFunc := func() {}
 		name := getShortFunctionName(testFunc)
-		
+
 		// The name should contain "TestGetShortFunctionName.func1" or similar
 		// depending on Go version and compilation
 		assert.Assert(t, len(name) > 0)

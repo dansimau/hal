@@ -29,7 +29,7 @@ func TestSunTimes_Sunrise(t *testing.T) {
 		sunrise := sunTimes.Sunrise()
 		// Sunrise should be a valid time and in the past or future of today
 		assert.Assert(t, !sunrise.IsZero())
-		
+
 		// Sunrise should be before sunset
 		sunset := sunTimes.Sunset()
 		assert.Assert(t, sunrise.Before(sunset))
@@ -61,7 +61,7 @@ func TestSunTimes_Sunset(t *testing.T) {
 		sunset := sunTimes.Sunset()
 		// Sunset should be a valid time
 		assert.Assert(t, !sunset.IsZero())
-		
+
 		// Sunset should be after sunrise
 		sunrise := sunTimes.Sunrise()
 		assert.Assert(t, sunset.After(sunrise))

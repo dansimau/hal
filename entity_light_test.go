@@ -88,7 +88,7 @@ func TestLight_TurnOn(t *testing.T) {
 		// This would require mocking the connection and CallService method
 		// For now, we'll test the error case above
 		light := NewLight("light.test")
-		
+
 		// Test with attributes
 		err := light.TurnOn(map[string]any{"brightness": 128})
 		assert.Equal(t, err, ErrEntityNotRegistered)
@@ -130,7 +130,7 @@ func TestLightGroup_GetBrightness(t *testing.T) {
 
 		state1 := homeassistant.State{Attributes: map[string]any{"brightness": float64(100)}}
 		state2 := homeassistant.State{Attributes: map[string]any{"brightness": float64(200)}}
-		
+
 		light1.SetState(state1)
 		light2.SetState(state2)
 
