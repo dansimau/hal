@@ -7,6 +7,8 @@ import (
 )
 
 func TestNewSunTimes(t *testing.T) {
+	t.Parallel()
+
 	config := LocationConfig{
 		Latitude:  37.7749,
 		Longitude: -122.4194,

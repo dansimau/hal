@@ -9,7 +9,10 @@ import (
 )
 
 func TestSearchParentsForFile(t *testing.T) {
+	t.Parallel()
+
 	t.Run("finds file in current directory", func(t *testing.T) {
+		t.Parallel()
 		tmpDir := t.TempDir()
 		testFile := "test.txt"
 		testPath := filepath.Join(tmpDir, testFile)
@@ -23,6 +26,7 @@ func TestSearchParentsForFile(t *testing.T) {
 	})
 
 	t.Run("finds file in parent directory", func(t *testing.T) {
+		t.Parallel()
 		tmpDir := t.TempDir()
 		subDir := filepath.Join(tmpDir, "subdir")
 		err := os.Mkdir(subDir, 0o755)
@@ -40,6 +44,7 @@ func TestSearchParentsForFile(t *testing.T) {
 	})
 
 	t.Run("returns empty string when file not found", func(t *testing.T) {
+		t.Parallel()
 		tmpDir := t.TempDir()
 		foundPath, err := searchParentsForFile("nonexistent.txt", tmpDir)
 		assert.NilError(t, err)
@@ -47,6 +52,7 @@ func TestSearchParentsForFile(t *testing.T) {
 	})
 }
 
+//nolint:paralleltest // This test changes working directory and cannot run in parallel
 func TestSearchParentsForFileFromCwd(t *testing.T) {
 	t.Run("searches from current working directory", func(t *testing.T) {
 		tmpDir := t.TempDir()
@@ -76,7 +82,10 @@ func TestSearchParentsForFileFromCwd(t *testing.T) {
 }
 
 func TestGetParents(t *testing.T) {
+	t.Parallel()
+
 	t.Run("returns correct parent paths", func(t *testing.T) {
+		t.Parallel()
 		if filepath.Separator == '\\' {
 			// Windows paths
 			paths := getParents("C:\\Users\\test\\project")
@@ -102,6 +111,7 @@ func TestGetParents(t *testing.T) {
 	})
 
 	t.Run("handles root directory", func(t *testing.T) {
+		t.Parallel()
 		paths := getParents("/")
 		expected := []string{"/"}
 		assert.DeepEqual(t, paths, expected)
@@ -109,7 +119,10 @@ func TestGetParents(t *testing.T) {
 }
 
 func TestFileExists(t *testing.T) {
+	t.Parallel()
+
 	t.Run("returns true for existing file", func(t *testing.T) {
+		t.Parallel()
 		tmpDir := t.TempDir()
 		testPath := filepath.Join(tmpDir, "test.txt")
 
@@ -121,11 +134,13 @@ func TestFileExists(t *testing.T) {
 	})
 
 	t.Run("returns false for non-existent file", func(t *testing.T) {
+		t.Parallel()
 		exists := fileExists("/nonexistent/path/file.txt")
 		assert.Equal(t, exists, false)
 	})
 
 	t.Run("returns true for existing directory", func(t *testing.T) {
+		t.Parallel()
 		tmpDir := t.TempDir()
 		exists := fileExists(tmpDir)
 		assert.Equal(t, exists, true)

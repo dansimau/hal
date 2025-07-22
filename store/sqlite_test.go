@@ -8,6 +8,8 @@ import (
 )
 
 func TestSQLitePragmaConfiguration(t *testing.T) {
+	t.Parallel()
+
 	// Create a temporary database file
 	tmpFile := "test_sqlite.db"
 	defer os.Remove(tmpFile)

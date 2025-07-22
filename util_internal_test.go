@@ -75,7 +75,10 @@ func TestGetStringOrStringSlice(t *testing.T) {
 }
 
 func TestGetShortFunctionName(t *testing.T) {
+	t.Parallel()
+
 	t.Run("extracts function name from function reference", func(t *testing.T) {
+		t.Parallel()
 		testFunc := func() {}
 		name := getShortFunctionName(testFunc)
 
@@ -86,11 +89,13 @@ func TestGetShortFunctionName(t *testing.T) {
 	})
 
 	t.Run("handles named function", func(t *testing.T) {
+		t.Parallel()
 		name := getShortFunctionName(getShortFunctionName)
 		assert.Equal(t, name, "getShortFunctionName")
 	})
 
 	t.Run("handles method", func(t *testing.T) {
+		t.Parallel()
 		light := NewLight("test")
 		name := getShortFunctionName(light.TurnOn)
 		// Method names may have "-fm" suffix in Go runtime
@@ -99,12 +104,16 @@ func TestGetShortFunctionName(t *testing.T) {
 }
 
 func TestGetStringOrStringSliceAdditional(t *testing.T) {
+	t.Parallel()
+
 	t.Run("handles boolean input", func(t *testing.T) {
+		t.Parallel()
 		result := getStringOrStringSlice(true)
 		assert.DeepEqual(t, result, []string{})
 	})
 
 	t.Run("handles struct input", func(t *testing.T) {
+		t.Parallel()
 		type testStruct struct {
 			field string
 		}

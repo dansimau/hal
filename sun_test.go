@@ -9,7 +9,9 @@ import (
 
 
 func TestSunTimes_Sunrise(t *testing.T) {
+	t.Parallel()
 	t.Run("returns sunrise time for San Francisco", func(t *testing.T) {
+		t.Parallel()
 		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
@@ -26,6 +28,7 @@ func TestSunTimes_Sunrise(t *testing.T) {
 	})
 
 	t.Run("returns different times for different locations", func(t *testing.T) {
+		t.Parallel()
 		sfConfig := hal.LocationConfig{Latitude: 37.7749, Longitude: -122.4194} // San Francisco
 		nyConfig := hal.LocationConfig{Latitude: 40.7128, Longitude: -74.0060}  // New York
 
@@ -41,7 +44,9 @@ func TestSunTimes_Sunrise(t *testing.T) {
 }
 
 func TestSunTimes_Sunset(t *testing.T) {
+	t.Parallel()
 	t.Run("returns sunset time for San Francisco", func(t *testing.T) {
+		t.Parallel()
 		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
@@ -59,7 +64,9 @@ func TestSunTimes_Sunset(t *testing.T) {
 }
 
 func TestSunTimes_IsDayTime(t *testing.T) {
+	t.Parallel()
 	t.Run("correctly determines day/night for known time", func(t *testing.T) {
+		t.Parallel()
 		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
@@ -73,6 +80,7 @@ func TestSunTimes_IsDayTime(t *testing.T) {
 	})
 
 	t.Run("day/night are opposite", func(t *testing.T) {
+		t.Parallel()
 		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
@@ -88,7 +96,9 @@ func TestSunTimes_IsDayTime(t *testing.T) {
 }
 
 func TestSunTimes_IsNightTime(t *testing.T) {
+	t.Parallel()
 	t.Run("is opposite of IsDayTime", func(t *testing.T) {
+		t.Parallel()
 		config := hal.LocationConfig{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
@@ -104,7 +114,9 @@ func TestSunTimes_IsNightTime(t *testing.T) {
 }
 
 func TestSunTimes_EdgeCases(t *testing.T) {
+	t.Parallel()
 	t.Run("handles extreme northern latitude", func(t *testing.T) {
+		t.Parallel()
 		// Test with extreme latitude (northern Norway)
 		config := hal.LocationConfig{
 			Latitude:  78.2156,
@@ -130,6 +142,7 @@ func TestSunTimes_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("handles zero coordinates", func(t *testing.T) {
+		t.Parallel()
 		config := hal.LocationConfig{
 			Latitude:  0,
 			Longitude: 0,

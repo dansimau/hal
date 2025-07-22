@@ -9,6 +9,7 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+//nolint:paralleltest // This test changes working directory and cannot run in parallel
 func TestLoadConfig(t *testing.T) {
 	t.Run("loads valid config", func(t *testing.T) {
 		// Create a temporary directory and config file
