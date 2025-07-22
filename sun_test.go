@@ -6,8 +6,6 @@ import (
 	"github.com/dansimau/hal"
 	"gotest.tools/v3/assert"
 )
-
-
 func TestSunTimes_Sunrise(t *testing.T) {
 	t.Parallel()
 	t.Run("returns sunrise time for San Francisco", func(t *testing.T) {
