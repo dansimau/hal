@@ -29,7 +29,7 @@ type Connection struct {
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
 
-	homeAssistant *hassws.Client
+	homeAssistant  *hassws.Client
 	metricsService *metrics.Service
 
 	*SunTimes
@@ -161,9 +161,6 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		// Record tick processing time metric
 		h.metricsService.RecordTimer(store.MetricTypeTickProcessingTime, timeTaken, event.Event.EventData.EntityID, "")
 	})()
-
-	// Record automation evaluation metric
-	h.metricsService.RecordCounter(store.MetricTypeAutomationEvaluated, event.Event.EventData.EntityID, "")
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()

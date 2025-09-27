@@ -1,7 +1,6 @@
 package testutil
 
 import (
-	"fmt"
 	"log/slog"
 	"testing"
 

@@ -27,13 +27,6 @@ type TimePeriod struct {
 	Duration time.Duration
 }
 
-var timePeriods = []TimePeriod{
-	{"Last Minute", time.Minute},
-	{"Last Hour", time.Hour},
-	{"Last Day", 24 * time.Hour},
-	{"Last Month", 30 * 24 * time.Hour},
-}
-
 // NewStatsCmd creates the stats command
 func NewStatsCmd() *cobra.Command {
 	var dbPath string
@@ -65,7 +58,6 @@ func runStatsCommand(dbPath string) error {
 	// Get stats for all metric types
 	metricTypes := []store.MetricType{
 		store.MetricTypeAutomationTriggered,
-		store.MetricTypeAutomationEvaluated,
 		store.MetricTypeTickProcessingTime,
 	}
 
@@ -152,8 +144,6 @@ func formatMetricType(metricType store.MetricType) string {
 	switch metricType {
 	case store.MetricTypeAutomationTriggered:
 		return "Automations Triggered"
-	case store.MetricTypeAutomationEvaluated:
-		return "Automations Evaluated"
 	case store.MetricTypeTickProcessingTime:
 		return "Tick Processing Time (p99)"
 	default:
