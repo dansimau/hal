@@ -25,7 +25,7 @@ func NewClientServer(t *testing.T) (*hal.Connection, *hassws.Server, func()) {
 	server, err := hassws.NewServer(validUsers)
 	assert.NilError(t, err)
 
-	// Create client and connection
+	// Create client and connection with unique test database
 	conn := hal.NewConnection(hal.Config{
 		HomeAssistant: hal.HomeAssistantConfig{
 			Host:   server.ListenAddress(),

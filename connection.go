@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dansimau/hal/hassws"
+	"github.com/dansimau/hal/metrics"
 	"github.com/dansimau/hal/perf"
 	"github.com/dansimau/hal/store"
 	"github.com/google/go-cmp/cmp"
@@ -28,7 +29,8 @@ type Connection struct {
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
 
-	homeAssistant *hassws.Client
+	homeAssistant  *hassws.Client
+	metricsService *metrics.Service
 
 	*SunTimes
 }
@@ -56,9 +58,10 @@ func NewConnection(cfg Config) *Connection {
 	})
 
 	return &Connection{
-		config:        cfg,
-		db:            db,
-		homeAssistant: api,
+		config:         cfg,
+		db:             db,
+		homeAssistant:  api,
+		metricsService: metrics.NewService(db),
 
 		automations: make(map[string][]Automation),
 		entities:    make(map[string]EntityInterface),
@@ -103,6 +106,9 @@ func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 
 // Start connects to the Home Assistant websocket and starts listening for events.
 func (h *Connection) Start() error {
+	// Start metrics service
+	h.metricsService.Start()
+
 	if err := h.homeAssistant.Connect(); err != nil {
 		return err
 	}
@@ -119,6 +125,7 @@ func (h *Connection) Start() error {
 }
 
 func (h *Connection) Close() {
+	h.metricsService.Stop()
 	h.homeAssistant.Close()
 }
 
@@ -151,6 +158,8 @@ func (h *Connection) syncStates() error {
 func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	defer perf.Timer(func(timeTaken time.Duration) {
 		slog.Debug("Tick processing time", "duration", timeTaken)
+		// Record tick processing time metric
+		h.metricsService.RecordTimer(store.MetricTypeTickProcessingTime, timeTaken, event.Event.EventData.EntityID, "")
 	})()
 
 	h.mutex.Lock()
@@ -192,6 +201,8 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	// Dispatch automations
 	for _, automation := range h.automations[event.Event.EventData.EntityID] {
 		slog.Info("Running automation", "name", automation.Name())
+		// Record automation triggered metric
+		h.metricsService.RecordCounter(store.MetricTypeAutomationTriggered, event.Event.EventData.EntityID, automation.Name())
 		automation.Action(entity)
 	}
 }
