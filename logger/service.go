@@ -3,7 +3,6 @@ package logger
 
 import (
 	"log/slog"
-	"runtime"
 	"sync"
 	"time"
 
@@ -175,15 +174,7 @@ func (s *Service) logToDatabase(msg string, entityID string) {
 		}
 
 		if err := s.db.Create(&log).Error; err != nil {
-
 			slog.Error("Failed to write log to database", "error", err, "message", msg)
-
-			// Print stack trace when a database error occurs
-			stackBuf := make([]byte, 2048)
-			n := runtime.Stack(stackBuf, false)
-			println(string(stackBuf[:n]))
-			println(s.db)
-
 			s.lastError = err
 			s.errorCount++
 		}
