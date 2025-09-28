@@ -2,10 +2,8 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/dansimau/hal/store"
@@ -14,7 +12,6 @@ import (
 
 // NewLogsCmd creates the logs command
 func NewLogsCmd() *cobra.Command {
-	var dbPath string
 	var fromTime string
 	var toTime string
 	var lastDuration string
@@ -33,14 +30,12 @@ Shows logs in chronological order with optional filtering by time range or entit
   hal logs --last 5m                   # Show logs from last 5 minutes
   hal logs --last 1h                   # Show logs from last 1 hour
   hal logs --last 1d                   # Show logs from last 1 day
-  hal logs --entity-id "light.kitchen" # Show logs for specific entity
-  hal logs --db custom.db              # Use custom database`,
+  hal logs --entity-id "light.kitchen" # Show logs for specific entity`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLogsCommand(dbPath, fromTime, toTime, lastDuration, entityID)
+			return runLogsCommand(fromTime, toTime, lastDuration, entityID)
 		},
 	}
 
-	cmd.Flags().StringVar(&dbPath, "db", "sqlite.db", "Database file path")
 	cmd.Flags().StringVar(&fromTime, "from", "", "Start time for filtering logs (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)")
 	cmd.Flags().StringVar(&toTime, "to", "", "End time for filtering logs (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)")
 	cmd.Flags().StringVar(&lastDuration, "last", "", "Show logs from last duration (e.g., 5m, 1h, 2d)")
@@ -49,9 +44,9 @@ Shows logs in chronological order with optional filtering by time range or entit
 	return cmd
 }
 
-func runLogsCommand(dbPath, fromTime, toTime, lastDuration, entityID string) error {
-	// Open database connection
-	db, err := store.Open(dbPath)
+func runLogsCommand(fromTime, toTime, lastDuration, entityID string) error {
+	// Open database connection using default path
+	db, err := store.Open("sqlite.db")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -136,21 +131,14 @@ func printLogs(logs []store.Log) error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	defer w.Flush()
-
-	// Print header
-	fmt.Fprintf(w, "Timestamp\tEntity ID\tMessage\n")
-	fmt.Fprintf(w, "---------\t---------\t-------\n")
-
-	// Print data rows
+	// Print logs without header to look like a log file
 	for _, log := range logs {
 		entityIDStr := ""
 		if log.EntityID != nil {
-			entityIDStr = *log.EntityID
+			entityIDStr = fmt.Sprintf(" [%s]", *log.EntityID)
 		}
 		
-		fmt.Fprintf(w, "%s\t%s\t%s\n",
+		fmt.Printf("%s%s %s\n",
 			log.Timestamp.Format("2006-01-02 15:04:05"),
 			entityIDStr,
 			log.LogText,
