@@ -22,4 +22,5 @@ func main() {
 
 func init() {
 	rootCmd.AddCommand(commands.NewStatsCmd())
+	rootCmd.AddCommand(commands.NewLogsCmd())
 }

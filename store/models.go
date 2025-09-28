@@ -37,3 +37,11 @@ type Metric struct {
 	EntityID       string     `gorm:"size:100"` // Optional: which entity triggered this
 	AutomationName string     `gorm:"size:100"` // Optional: which automation was involved
 }
+
+// Log represents a single log entry
+type Log struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement"`
+	Timestamp time.Time `gorm:"index;not null"`
+	EntityID  *string   `gorm:"index;size:100"` // Optional: which entity this log relates to
+	LogText   string    `gorm:"not null;type:text"`
+}
