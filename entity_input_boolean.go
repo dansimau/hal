@@ -1,9 +1,8 @@
 package hal
 
 import (
-	"log/slog"
-
 	"github.com/dansimau/hal/hassws"
+	"github.com/dansimau/hal/logger"
 )
 
 // InputBoolean is a virtual switch that can be turned on or off.
@@ -26,13 +25,12 @@ func (s *InputBoolean) IsOn() bool {
 func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 	entityID := s.GetID()
 	if s.connection == nil {
-		// Use slog directly when connection is nil
-		slog.Error("InputBoolean not registered", "entity", entityID)
+		logger.Error("InputBoolean not registered", entityID)
 
 		return ErrEntityNotRegistered
 	}
 
-	s.connection.loggingService.Debug("Turning on virtual switch", &entityID, "entity", entityID)
+	logger.Debug("Turning on virtual switch", entityID)
 
 	data := map[string]any{
 		"entity_id": []string{s.GetID()},
@@ -52,7 +50,7 @@ func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 	})
 	if err != nil {
 		entityID := s.GetID()
-		s.connection.loggingService.Error("Error turning on virtual switch", &entityID, "entity", entityID, "error", err)
+		logger.Error("Error turning on virtual switch", entityID, "error", err)
 	}
 
 	return err
@@ -61,13 +59,12 @@ func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 func (s *InputBoolean) TurnOff() error {
 	entityID := s.GetID()
 	if s.connection == nil {
-		// Use slog directly when connection is nil
-		slog.Error("InputBoolean not registered", "entity", entityID)
+		logger.Error("InputBoolean not registered", entityID)
 
 		return ErrEntityNotRegistered
 	}
 
-	s.connection.loggingService.Info("Turning off virtual switch", &entityID, "entity", entityID)
+	logger.Info("Turning off virtual switch", entityID)
 
 	_, err := s.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
@@ -79,7 +76,7 @@ func (s *InputBoolean) TurnOff() error {
 	})
 	if err != nil {
 		entityID := s.GetID()
-		s.connection.loggingService.Error("Error turning off virtual switch", &entityID, "entity", entityID, "error", err)
+		logger.Error("Error turning off virtual switch", entityID, "error", err)
 	}
 
 	return err

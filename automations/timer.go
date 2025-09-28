@@ -1,10 +1,10 @@
 package halautomations
 
 import (
-	"log/slog"
 	"time"
 
 	"github.com/dansimau/hal"
+	"github.com/dansimau/hal/logger"
 )
 
 type Timer struct {
@@ -52,7 +52,7 @@ func (a *Timer) Run(action func()) *Timer {
 
 // startTimer starts the timer.
 func (a *Timer) startTimer() {
-	slog.Info("Starting timer", "automation", a.name)
+	logger.Info("Starting timer", "", "automation", a.name)
 
 	if a.timer == nil {
 		a.timer = time.AfterFunc(a.delay, a.runAction)
@@ -69,7 +69,7 @@ func (a *Timer) stopTimer() {
 }
 
 func (a *Timer) runAction() {
-	slog.Info("Timer elapsed, executing action", "automation", a.name)
+	logger.Info("Timer elapsed, executing action", "", "automation", a.name)
 
 	a.action()
 }
@@ -85,7 +85,7 @@ func (a *Timer) Entities() hal.Entities {
 func (a *Timer) Action(_ hal.EntityInterface) {
 	for i, condition := range a.conditions {
 		if !condition() {
-			slog.Info("Timer condition not met, stopping existing timer", "automation", a.name, "condition", i)
+			logger.Info("Timer condition not met, stopping existing timer", "", "automation", a.name, "condition", i)
 			a.stopTimer()
 			return
 		}

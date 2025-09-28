@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/dansimau/hal/homeassistant"
+	"github.com/dansimau/hal/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -54,7 +54,7 @@ func (c *Client) authenticate() error {
 		return err
 	}
 
-	slog.Debug("Authenticating")
+	logger.Debug("Authenticating", "")
 
 	// Send auth message with access token
 	if err := c.send(AuthRequest{
@@ -70,7 +70,7 @@ func (c *Client) authenticate() error {
 		return err
 	}
 
-	slog.Debug("Received auth response", "msg", authResponse)
+	logger.Debug("Received auth response", "", "msg", authResponse)
 
 	if authResponse.Type == "auth_invalid" {
 		return fmt.Errorf("%w: %s", ErrAuthInvalid, authResponse.Message)
@@ -80,7 +80,7 @@ func (c *Client) authenticate() error {
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, authResponse.Message)
 	}
 
-	slog.Debug("Authenticated")
+	logger.Debug("Authenticated", "")
 
 	return nil
 }
@@ -94,14 +94,14 @@ func (c *Client) shutdown() error {
 }
 
 func (c *Client) Connect() error {
-	slog.Info("Connecting", "host", c.cfg.Host)
+	logger.Info("Connecting", "", "host", c.cfg.Host)
 
 	conn, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://%s/api/websocket", c.cfg.Host), nil)
 	if err != nil {
 		return err
 	}
 
-	slog.Debug("Connection established")
+	logger.Debug("Connection established", "")
 
 	c.conn = conn
 
@@ -117,7 +117,7 @@ func (c *Client) Connect() error {
 
 // Listen for messages from the websocket and dispatch to listener channels.
 func (c *Client) listen() {
-	slog.Info("Connection established")
+	logger.Info("Connection established", "")
 
 	for {
 		_, msgBytes, err := c.conn.ReadMessage()
@@ -126,7 +126,7 @@ func (c *Client) listen() {
 				log.Println("Received close message, bye")
 
 				if err := c.shutdown(); err != nil {
-					slog.Error("Error during shutdown", "error", err)
+					logger.Error("Error during shutdown", "", "error", err)
 				}
 
 				return
@@ -135,12 +135,12 @@ func (c *Client) listen() {
 			panic(fmt.Errorf("error reading from websocket: %w", err))
 		}
 
-		slog.Debug("Received message", "msg", string(msgBytes))
+		logger.Debug("Received message", "", "msg", string(msgBytes))
 
 		// Get message ID
 		var msg CommandMessage
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
-			slog.Error("Error unmarshalling message", "error", err)
+			logger.Error("Error unmarshalling message", "", "error", err)
 
 			continue
 		}
@@ -150,7 +150,7 @@ func (c *Client) listen() {
 		c.mutex.RUnlock()
 
 		if !ok {
-			slog.Warn("No listeners for message", "id", msg.ID)
+			logger.Warn("No listeners for message", "", "id", msg.ID)
 
 			continue
 		}
@@ -159,7 +159,7 @@ func (c *Client) listen() {
 			defer func() {
 				if r := recover(); r != nil {
 					c.removeMessageResponseListener(msg.ID)
-					slog.Debug("Removed listener due to panic sending to channel", "id", msg.ID)
+					logger.Debug("Removed listener due to panic sending to channel", "", "id", msg.ID)
 				}
 			}()
 
@@ -180,7 +180,7 @@ func (c *Client) read(target any) error {
 		return err
 	}
 
-	slog.Debug("Received message", "msg", string(msgBytes))
+	logger.Debug("Received message", "", "msg", string(msgBytes))
 
 	return json.Unmarshal(msgBytes, target)
 }
@@ -192,7 +192,7 @@ func (c *Client) send(msg any) error {
 		return err
 	}
 
-	slog.Debug("Writing message", "msg", string(msgBytes))
+	logger.Debug("Writing message", "", "msg", string(msgBytes))
 
 	return c.conn.WriteMessage(websocket.TextMessage, msgBytes)
 }
@@ -303,7 +303,7 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 		for b := range ch {
 			var msg EventMessage
 			if err := json.Unmarshal(b, &msg); err != nil {
-				slog.Error("Error unmarshalling event message", "error", err)
+				logger.Error("Error unmarshalling event message", "", "error", err)
 
 				continue
 			}
@@ -312,7 +312,7 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 		}
 	}(responseChan)
 
-	slog.Info("Listening for state changes")
+	logger.Info("Listening for state changes", "")
 
 	return nil
 }
@@ -334,7 +334,7 @@ func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error
 	}
 
 	if resp.Type == MessageTypeResult && !resp.Success {
-		slog.Error("Call service failed", "err", resp.Error)
+		logger.Error("Call service failed", "", "err", resp.Error)
 	}
 
 	return resp, nil

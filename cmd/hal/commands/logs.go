@@ -134,8 +134,8 @@ func printLogs(logs []store.Log) error {
 	// Print logs without header to look like a log file
 	for _, log := range logs {
 		entityIDStr := ""
-		if log.EntityID != nil {
-			entityIDStr = fmt.Sprintf(" [%s]", *log.EntityID)
+		if log.EntityID != "" {
+			entityIDStr = fmt.Sprintf(" [%s]", log.EntityID)
 		}
 		
 		fmt.Printf("%s%s %s\n",

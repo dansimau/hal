@@ -1,9 +1,9 @@
 package metrics
 
 import (
-	"log/slog"
 	"time"
 
+	"github.com/dansimau/hal/logger"
 	"github.com/dansimau/hal/store"
 	"gorm.io/gorm"
 )
@@ -30,13 +30,13 @@ func NewService(db *gorm.DB) *Service {
 // Start begins the metrics pruning goroutine
 func (s *Service) Start() {
 	go s.pruneMetrics()
-	slog.Info("Metrics service started")
+	logger.Info("Metrics service started", "")
 }
 
 // Stop stops the metrics service
 func (s *Service) Stop() {
 	close(s.stopChan)
-	slog.Info("Metrics service stopped")
+	logger.Info("Metrics service stopped", "")
 }
 
 // RecordCounter records a counter metric (value = 1)
@@ -51,7 +51,7 @@ func (s *Service) RecordCounter(metricType store.MetricType, entityID, automatio
 	}
 	
 	if err := s.db.Create(&metric).Error; err != nil {
-		slog.Error("Failed to record counter metric", "error", err, "type", metricType)
+		logger.Error("Failed to record counter metric", "", "error", err, "type", metricType)
 	}
 }
 
@@ -67,7 +67,7 @@ func (s *Service) RecordTimer(metricType store.MetricType, duration time.Duratio
 	}
 	
 	if err := s.db.Create(&metric).Error; err != nil {
-		slog.Error("Failed to record timer metric", "error", err, "type", metricType)
+		logger.Error("Failed to record timer metric", "", "error", err, "type", metricType)
 	}
 }
 
@@ -84,9 +84,9 @@ func (s *Service) pruneMetrics() {
 			cutoffTime := time.Now().Add(-s.retentionTime)
 			result := s.db.Where("timestamp < ?", cutoffTime).Delete(&store.Metric{})
 			if result.Error != nil {
-				slog.Error("Failed to prune old metrics", "error", result.Error)
+				logger.Error("Failed to prune old metrics", "", "error", result.Error)
 			} else if result.RowsAffected > 0 {
-				slog.Info("Pruned old metrics", "count", result.RowsAffected, "cutoff", cutoffTime)
+				logger.Info("Pruned old metrics", "", "count", result.RowsAffected, "cutoff", cutoffTime)
 			}
 		}
 	}

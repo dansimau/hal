@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/dansimau/hal/hassws"
-	"github.com/dansimau/hal/logging"
+	"github.com/dansimau/hal/logger"
 	"github.com/dansimau/hal/metrics"
 	"github.com/dansimau/hal/perf"
 	"github.com/dansimau/hal/store"
@@ -29,9 +29,8 @@ type Connection struct {
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
 
-	homeAssistant   *hassws.Client
-	metricsService  *metrics.Service
-	loggingService  *logging.Service
+	homeAssistant  *hassws.Client
+	metricsService *metrics.Service
 
 	*SunTimes
 }
@@ -58,12 +57,14 @@ func NewConnection(cfg Config) *Connection {
 		Token: cfg.HomeAssistant.Token,
 	})
 
+	// Set the database on the global logger
+	logger.SetDefaultDatabase(db)
+
 	return &Connection{
-		config:          cfg,
-		db:              db,
-		homeAssistant:   api,
-		metricsService:  metrics.NewService(db),
-		loggingService:  logging.NewService(db),
+		config:         cfg,
+		db:             db,
+		homeAssistant:  api,
+		metricsService: metrics.NewService(db),
 
 		automations: make(map[string][]Automation),
 		entities:    make(map[string]EntityInterface),
@@ -84,7 +85,7 @@ func (h *Connection) FindEntities(v any) {
 // RegisterAutomations registers automations and binds them to the relevant entities.
 func (h *Connection) RegisterAutomations(automations ...Automation) {
 	for _, automation := range automations {
-		h.loggingService.Info("Registering automation", nil, "Name", automation.Name())
+		logger.Info("Registering automation", "", "Name", automation.Name())
 
 		for _, entity := range automation.Entities() {
 			h.automations[entity.GetID()] = append(h.automations[entity.GetID()], automation)
@@ -96,7 +97,7 @@ func (h *Connection) RegisterAutomations(automations ...Automation) {
 func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 	for _, entity := range entities {
 		entityID := entity.GetID()
-		h.loggingService.Info("Registering entity", &entityID, "EntityID", entityID)
+		logger.Info("Registering entity", entityID)
 		entity.BindConnection(h)
 		h.entities[entity.GetID()] = entity
 
@@ -111,7 +112,7 @@ func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 func (h *Connection) Start() error {
 	// Start services
 	h.metricsService.Start()
-	h.loggingService.Start()
+	logger.StartDefault()
 
 	if err := h.homeAssistant.Connect(); err != nil {
 		return err
@@ -130,13 +131,13 @@ func (h *Connection) Start() error {
 
 func (h *Connection) Close() {
 	h.metricsService.Stop()
-	h.loggingService.Stop()
+	logger.StopDefault()
 	h.homeAssistant.Close()
 }
 
 func (h *Connection) syncStates() error {
 	defer perf.Timer(func(timeTaken time.Duration) {
-		h.loggingService.Info("Initial state sync complete", nil, "duration", timeTaken)
+		logger.Info("Initial state sync complete", "", "duration", timeTaken)
 	})()
 
 	states, err := h.homeAssistant.GetStates()
@@ -150,7 +151,7 @@ func (h *Connection) syncStates() error {
 			continue
 		}
 
-		h.loggingService.Debug("Setting initial state", &state.EntityID, "EntityID", state.EntityID, "State", state)
+		logger.Debug("Setting initial state", state.EntityID, "State", state)
 
 		entity.SetState(state)
 	}
@@ -162,7 +163,7 @@ func (h *Connection) syncStates() error {
 // entity and fire any automations listening for state changes to this entity.
 func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	defer perf.Timer(func(timeTaken time.Duration) {
-		h.loggingService.Debug("Tick processing time", &event.Event.EventData.EntityID, "duration", timeTaken)
+		logger.Debug("Tick processing time", event.Event.EventData.EntityID, "duration", timeTaken)
 		// Record tick processing time metric
 		h.metricsService.RecordTimer(store.MetricTypeTickProcessingTime, timeTaken, event.Event.EventData.EntityID, "")
 	})()
@@ -172,12 +173,12 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 
 	entity, ok := h.entities[event.Event.EventData.EntityID]
 	if !ok {
-		h.loggingService.Debug("Entity not registered", &event.Event.EventData.EntityID, "EntityID", event.Event.EventData.EntityID)
+		logger.Debug("Entity not registered", event.Event.EventData.EntityID)
 
 		return
 	}
 
-	h.loggingService.Debug("State changed for", &event.Event.EventData.EntityID, "EntityID", event.Event.EventData.EntityID)
+	logger.Debug("State changed for", event.Event.EventData.EntityID)
 
 	fmt.Fprintf(os.Stderr, "Diff:\n%s\n", cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
 
@@ -196,14 +197,14 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 
 	// Prevent loops by not running automations that originate from hal
 	if event.Event.Context.UserID == h.config.HomeAssistant.UserID {
-		h.loggingService.Debug("Skipping automation from own action", &event.Event.EventData.EntityID, "EntityID", event.Event.EventData.EntityID)
+		logger.Debug("Skipping automation from own action", event.Event.EventData.EntityID)
 
 		return
 	}
 
 	// Dispatch automations
 	for _, automation := range h.automations[event.Event.EventData.EntityID] {
-		h.loggingService.Info("Running automation", &event.Event.EventData.EntityID, "name", automation.Name())
+		logger.Info("Running automation", event.Event.EventData.EntityID, "name", automation.Name())
 		// Record automation triggered metric
 		h.metricsService.RecordCounter(store.MetricTypeAutomationTriggered, event.Event.EventData.EntityID, automation.Name())
 		automation.Action(entity)

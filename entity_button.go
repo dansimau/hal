@@ -2,6 +2,8 @@ package hal
 
 import (
 	"time"
+
+	"github.com/dansimau/hal/logger"
 )
 
 // buttonPressTimeout is the amount of time to listen for repeat presses.
@@ -39,7 +41,7 @@ func (b *Button) Action(_ EntityInterface) {
 	}
 
 	entityID := b.GetID()
-	b.connection.loggingService.Info("Button pressed", &entityID, "entity", entityID, "times", b.pressedTimes)
+	logger.Info("Button pressed", entityID, "times", b.pressedTimes)
 
 	b.lastPressed = time.Now()
 }

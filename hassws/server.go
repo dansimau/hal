@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"log/slog"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/dansimau/hal/homeassistant"
+	"github.com/dansimau/hal/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -74,7 +74,7 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	if err := s.handleAuthentication(conn); err != nil {
-		slog.Error("Authentication failed", "error", err)
+		logger.Error("Authentication failed", "", "error", err)
 
 		return
 	}
@@ -90,13 +90,13 @@ func (s *Server) listen() {
 				log.Println("[Server] Received close message, bye")
 
 				if err := s.shutdown(); err != nil {
-					slog.Error("Error during shutdown", "error", err)
+					logger.Error("Error during shutdown", "", "error", err)
 				}
 
 				break
 			}
 
-			slog.Error("Failed during read", "error", err)
+			logger.Error("Failed during read", "", "error", err)
 
 			break
 		}

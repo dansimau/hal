@@ -42,6 +42,6 @@ type Metric struct {
 type Log struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
 	Timestamp time.Time `gorm:"index;not null"`
-	EntityID  *string   `gorm:"index;size:255"` // Optional: which entity this log relates to
+	EntityID  string    `gorm:"index;size:255"` // Optional: which entity this log relates to
 	LogText   string    `gorm:"not null;type:text"`
 }

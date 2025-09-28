@@ -1,11 +1,11 @@
 package halautomations
 
 import (
-	"log/slog"
 	"time"
 
 	"github.com/benbjohnson/clock"
 	"github.com/dansimau/hal"
+	"github.com/dansimau/hal/logger"
 )
 
 type ConditionScene struct {
@@ -18,7 +18,6 @@ type ConditionScene struct {
 // any of the sensors are triggered and turned off after a given duration.
 type SensorsTriggerLights struct {
 	name string
-	log  *slog.Logger
 
 	// Brightness is the brightness of the lights when they are turned on. We
 	// have to set a brightness here so support dimming lights before turn off.
@@ -47,7 +46,6 @@ func NewSensorsTriggerLights() *SensorsTriggerLights {
 	return &SensorsTriggerLights{
 		dimLightsBeforeTurnOff: time.Second * 10,
 		brightness:             255,
-		log:                    slog.Default(),
 	}
 }
 
@@ -112,7 +110,6 @@ func (a *SensorsTriggerLights) WithLights(lights ...hal.LightInterface) *Sensors
 // WithName sets the name of the automation (appears in logs).
 func (a *SensorsTriggerLights) WithName(name string) *SensorsTriggerLights {
 	a.name = name
-	a.log = slog.With("automation", a.name)
 
 	return a
 }
@@ -191,7 +188,7 @@ func (a *SensorsTriggerLights) startDimLightsTimer() {
 		return
 	}
 
-	a.log.Info("Starting dim lights timer", "duration", dimLightsAfter.String())
+	logger.Info("Starting dim lights timer", "", "automation", a.name, "duration", dimLightsAfter.String())
 	a.dimLightsTimer.Start(a.dimLights, dimLightsAfter)
 }
 
@@ -200,7 +197,7 @@ func (a *SensorsTriggerLights) startTurnOffTimer() {
 		return
 	}
 
-	a.log.Info("Starting turn off timer", "duration", a.turnsOffAfter.String())
+	logger.Info("Starting turn off timer", "", "automation", a.name, "duration", a.turnsOffAfter.String())
 	a.turnOffTimer.Start(a.turnOffLights, *a.turnsOffAfter)
 
 	a.startDimLightsTimer()
@@ -209,7 +206,7 @@ func (a *SensorsTriggerLights) startTurnOffTimer() {
 func (a *SensorsTriggerLights) stopTurnOffTimer() {
 	wasRunning := a.turnOffTimer.IsRunning()
 
-	a.log.Info("Cancelling turn off timer", "wasRunning", wasRunning)
+	logger.Info("Cancelling turn off timer", "", "automation", a.name, "wasRunning", wasRunning)
 
 	a.turnOffTimer.Cancel()
 }
@@ -217,7 +214,7 @@ func (a *SensorsTriggerLights) stopTurnOffTimer() {
 func (a *SensorsTriggerLights) stopDimLightsTimer() {
 	wasRunning := a.dimLightsTimer.IsRunning()
 
-	a.log.Info("Cancelling dim lights timer", "wasRunning", wasRunning)
+	logger.Info("Cancelling dim lights timer", "", "automation", a.name, "wasRunning", wasRunning)
 
 	a.dimLightsTimer.Cancel()
 }
@@ -242,22 +239,22 @@ func (a *SensorsTriggerLights) turnOnLights() {
 		attributes = map[string]any{"brightness": a.brightness}
 	}
 
-	a.log.Info("Turning on lights", "attributes", attributes)
+	logger.Info("Turning on lights", "", "automation", a.name, "attributes", attributes)
 
 	for _, light := range a.turnsOnLights {
 		if err := light.TurnOn(attributes); err != nil {
-			a.log.Error("Error turning on light", "error", err)
+			logger.Error("Error turning on light", "", "automation", a.name, "error", err)
 		}
 	}
 }
 
 func (a *SensorsTriggerLights) dimLights() {
-	a.log.Info("Dimming lights prior to turning off")
+	logger.Info("Dimming lights prior to turning off", "", "automation", a.name)
 
 	for _, light := range a.turnsOffLights {
 		brightness := light.GetBrightness()
 		if brightness < 2 {
-			a.log.Info("Light is already at minimum brightness, skipping dimming", "light", light.GetID())
+			logger.Info("Light is already at minimum brightness, skipping dimming", "", "automation", a.name, "light", light.GetID())
 
 			continue
 		}
@@ -265,17 +262,17 @@ func (a *SensorsTriggerLights) dimLights() {
 		dimmedBrightness := brightness / 2
 
 		if err := light.TurnOn(map[string]any{"brightness": dimmedBrightness}); err != nil {
-			a.log.Error("Error dimming light", "error", err)
+			logger.Error("Error dimming light", "", "automation", a.name, "error", err)
 		}
 	}
 }
 
 func (a *SensorsTriggerLights) turnOffLights() {
-	a.log.Info("Turning off lights")
+	logger.Info("Turning off lights", "", "automation", a.name)
 
 	for _, light := range a.turnsOffLights {
 		if err := light.TurnOff(); err != nil {
-			a.log.Error("Error turning off light", "error", err)
+			logger.Error("Error turning off light", "", "automation", a.name, "error", err)
 		}
 	}
 }
@@ -301,16 +298,16 @@ func (a *SensorsTriggerLights) isSensor(entity hal.EntityInterface) bool {
 }
 
 func (a *SensorsTriggerLights) handleSensorStateChange() {
-	a.log.Info("Sensor state change")
+	logger.Info("Sensor state change", "", "automation", a.name)
 
 	if a.humanOverrideTimer.IsRunning() {
-		a.log.Info("Light overridden by human, skipping")
+		logger.Info("Light overridden by human, skipping", "", "automation", a.name)
 
 		return
 	}
 
 	if a.condition != nil && !a.condition() {
-		a.log.Info("Condition not met, skipping")
+		logger.Info("Condition not met, skipping", "", "automation", a.name)
 
 		return
 	}
@@ -318,7 +315,7 @@ func (a *SensorsTriggerLights) handleSensorStateChange() {
 	if a.triggered() {
 		lightsWereDimmedFromTimer := a.isLightDimmedFromTimer()
 
-		a.log.Info("Sensor triggered", "lightsWereDimmedFromTimer", lightsWereDimmedFromTimer)
+		logger.Info("Sensor triggered", "", "automation", a.name, "lightsWereDimmedFromTimer", lightsWereDimmedFromTimer)
 
 		a.stopTurnOffTimer()
 		a.stopDimLightsTimer()
@@ -326,21 +323,21 @@ func (a *SensorsTriggerLights) handleSensorStateChange() {
 		// This avoids a situation where the user has changed the lights state
 		// but it gets overridden by a sensor being triggered again.
 		if a.lightsOn() && !lightsWereDimmedFromTimer {
-			a.log.Info("Sensor triggered, but lights are already on, ignoring")
+			logger.Info("Sensor triggered, but lights are already on, ignoring", "", "automation", a.name)
 
 			return
 		}
 
-		a.log.Info("Sensor triggered, turning on lights")
+		logger.Info("Sensor triggered, turning on lights", "", "automation", a.name)
 		a.turnOnLights()
 	} else {
-		a.log.Info("Sensor cleared, starting turn off countdown")
+		logger.Info("Sensor cleared, starting turn off countdown", "", "automation", a.name)
 		a.startTurnOffTimer()
 	}
 }
 
 func (a *SensorsTriggerLights) handleLightStateChanged() {
-	a.log.Info("Light state change")
+	logger.Info("Light state change", "", "automation", a.name)
 
 	// Light was either turned on or off, or brightness changed or whatever,
 	// in which case we want to stop any further automations since the user has
@@ -350,10 +347,10 @@ func (a *SensorsTriggerLights) handleLightStateChanged() {
 
 	if a.humanOverrideFor != nil {
 		if a.lightsOn() {
-			a.log.Info("Light turned on, setting human override", "duration", a.humanOverrideFor.String())
+			logger.Info("Light turned on, setting human override", "", "automation", a.name, "duration", a.humanOverrideFor.String())
 			a.humanOverrideTimer.Start(nil, *a.humanOverrideFor)
 		} else {
-			a.log.Info("Light turned off, cancelling human override")
+			logger.Info("Light turned off, cancelling human override", "", "automation", a.name)
 			a.humanOverrideTimer.Cancel()
 		}
 	}
@@ -365,7 +362,7 @@ func (a *SensorsTriggerLights) isLightDimmedFromTimer() bool {
 }
 
 func (a *SensorsTriggerLights) Action(triggerEntity hal.EntityInterface) {
-	a.log.Info("Automation triggered with event", "state", triggerEntity.GetState())
+	logger.Info("Automation triggered with event", "", "automation", a.name, "state", triggerEntity.GetState())
 
 	if a.isSensor(triggerEntity) {
 		a.handleSensorStateChange()

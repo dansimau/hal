@@ -34,6 +34,6 @@ HAL is a Go-based home automation framework that connects to Home Assistant via 
 ### Testing
 
 - Uses `testutil/` package with mocking utilities and wait helpers
-- Clock mocking available via `github.com/benbjohnson/clock` 
+- Clock mocking available via `github.com/benbjohnson/clock`
 - Test coverage enforcement via `.testcoverage.yaml` configuration
 - Integration tests mock WebSocket connections to Home Assistant

@@ -1,9 +1,9 @@
 package hal
 
 import (
-	"log/slog"
 	"time"
 
+	"github.com/dansimau/hal/logger"
 	"github.com/nathan-osman/go-sunrise"
 )
 
@@ -16,7 +16,7 @@ func NewSunTimes(cfg LocationConfig) *SunTimes {
 		location: cfg,
 	}
 
-	slog.Info("Sun times for location",
+	logger.Info("Sun times for location", "",
 		"lat", cfg.Latitude,
 		"lng", cfg.Longitude,
 		"sunrise", sunTimes.Sunrise().Local().Format(time.Kitchen),

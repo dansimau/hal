@@ -11,10 +11,9 @@ import (
 
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	
-	// Use a temporary file database instead of in-memory to avoid concurrency issues
-	dbPath := t.TempDir() + "/test.db"
-	db, err := store.Open(dbPath)
+
+	// Use in-memory database for testing
+	db, err := store.Open(":memory:")
 	assert.NilError(t, err)
 	
 	// Ensure the Metric table is created (store.Open should handle this via AutoMigrate)
