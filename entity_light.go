@@ -39,13 +39,15 @@ func (l *Light) IsOn() bool {
 }
 
 func (l *Light) TurnOn(attributes ...map[string]any) error {
+	entityID := l.GetID()
 	if l.connection == nil {
-		slog.Error("Light not registered", "entity", l.GetID())
+		// Use slog directly when connection is nil
+		slog.Error("Light not registered", "entity", entityID)
 
 		return ErrEntityNotRegistered
 	}
 
-	slog.Debug("Turning on light", "entity", l.GetID())
+	l.connection.loggingService.Debug("Turning on light", &entityID, "entity", entityID)
 
 	data := map[string]any{
 		"entity_id": []string{l.GetID()},
@@ -64,7 +66,8 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 		Data:    data,
 	})
 	if err != nil {
-		slog.Error("Error turning on light", "entity", l.GetID(), "error", err)
+		entityID := l.GetID()
+		l.connection.loggingService.Error("Error turning on light", &entityID, "entity", entityID, "error", err)
 
 		return err
 	}
@@ -73,13 +76,15 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 }
 
 func (l *Light) TurnOff() error {
+	entityID := l.GetID()
 	if l.connection == nil {
-		slog.Error("Light not registered", "entity", l.GetID())
+		// Use slog directly when connection is nil
+		slog.Error("Light not registered", "entity", entityID)
 
 		return ErrEntityNotRegistered
 	}
 
-	slog.Info("Turning off light", "entity", l.GetID())
+	l.connection.loggingService.Info("Turning off light", &entityID, "entity", entityID)
 
 	data := map[string]any{
 		"entity_id": []string{l.GetID()},
@@ -92,7 +97,8 @@ func (l *Light) TurnOff() error {
 		Data:    data,
 	})
 	if err != nil {
-		slog.Error("Error turning off light", "entity", l.GetID(), "error", err)
+		entityID := l.GetID()
+		l.connection.loggingService.Error("Error turning off light", &entityID, "entity", entityID, "error", err)
 
 		return err
 	}

@@ -1,5 +1,5 @@
 # Binaries
-hal
+/hal
 
 # Test coverage
 cover.out
@@ -7,3 +7,11 @@ cover.out
 # Databases
 sqlite.db*
 test-results.json
+
+# SQLite database files and related WAL/SHM files
+*.db
+*.db-wal
+*.db-shm
+**/*.db
+**/*.db-wal
+**/*.db-shm

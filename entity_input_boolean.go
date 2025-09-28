@@ -24,13 +24,15 @@ func (s *InputBoolean) IsOn() bool {
 }
 
 func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
+	entityID := s.GetID()
 	if s.connection == nil {
-		slog.Error("InputBoolean not registered", "entity", s.GetID())
+		// Use slog directly when connection is nil
+		slog.Error("InputBoolean not registered", "entity", entityID)
 
 		return ErrEntityNotRegistered
 	}
 
-	slog.Debug("Turning on virtual switch", "entity", s.GetID())
+	s.connection.loggingService.Debug("Turning on virtual switch", &entityID, "entity", entityID)
 
 	data := map[string]any{
 		"entity_id": []string{s.GetID()},
@@ -49,20 +51,23 @@ func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 		Data:    data,
 	})
 	if err != nil {
-		slog.Error("Error turning on virtual switch", "entity", s.GetID(), "error", err)
+		entityID := s.GetID()
+		s.connection.loggingService.Error("Error turning on virtual switch", &entityID, "entity", entityID, "error", err)
 	}
 
 	return err
 }
 
 func (s *InputBoolean) TurnOff() error {
+	entityID := s.GetID()
 	if s.connection == nil {
-		slog.Error("InputBoolean not registered", "entity", s.GetID())
+		// Use slog directly when connection is nil
+		slog.Error("InputBoolean not registered", "entity", entityID)
 
 		return ErrEntityNotRegistered
 	}
 
-	slog.Info("Turning off virtual switch", "entity", s.GetID())
+	s.connection.loggingService.Info("Turning off virtual switch", &entityID, "entity", entityID)
 
 	_, err := s.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
@@ -73,7 +78,8 @@ func (s *InputBoolean) TurnOff() error {
 		},
 	})
 	if err != nil {
-		slog.Error("Error turning off virtual switch", "entity", s.GetID(), "error", err)
+		entityID := s.GetID()
+		s.connection.loggingService.Error("Error turning off virtual switch", &entityID, "entity", entityID, "error", err)
 	}
 
 	return err

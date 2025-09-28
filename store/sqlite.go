@@ -19,7 +19,7 @@ func Open(path string) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	if err := db.AutoMigrate(&Entity{}, &Metric{}); err != nil {
+	if err := db.AutoMigrate(&Entity{}, &Metric{}, &Log{}); err != nil {
 		return nil, err
 	}
 

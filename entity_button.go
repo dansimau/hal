@@ -1,7 +1,6 @@
 package hal
 
 import (
-	"log/slog"
 	"time"
 )
 
@@ -39,7 +38,8 @@ func (b *Button) Action(_ EntityInterface) {
 		b.pressedTimes = 1
 	}
 
-	slog.Info("Button pressed", "entity", b.GetID(), "times", b.pressedTimes)
+	entityID := b.GetID()
+	b.connection.loggingService.Info("Button pressed", &entityID, "entity", entityID, "times", b.pressedTimes)
 
 	b.lastPressed = time.Now()
 }
