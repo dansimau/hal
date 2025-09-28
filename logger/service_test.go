@@ -38,8 +38,8 @@ func TestLoggingService(t *testing.T) {
 	}
 
 	// Check first log with entity ID
-	if logs[0].LogText != "Light turned on" {
-		t.Errorf("Expected log text 'Light turned on', got '%s'", logs[0].LogText)
+	if logs[0].LogText != "Light turned on entity_id=light.kitchen" {
+		t.Errorf("Expected log text 'Light turned on entity_id=light.kitchen', got '%s'", logs[0].LogText)
 	}
 	if logs[0].EntityID != "light.kitchen" {
 		t.Errorf("Expected entity ID 'light.kitchen', got '%s'", logs[0].EntityID)

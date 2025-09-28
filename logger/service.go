@@ -2,7 +2,9 @@
 package logger
 
 import (
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,7 +123,7 @@ func (s *Service) Info(msg string, entityID string, args ...any) {
 	slog.Info(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID)
+	s.logToDatabase(msg, entityID, args...)
 }
 
 // Error logs an error message to both console and database
@@ -133,7 +135,7 @@ func (s *Service) Error(msg string, entityID string, args ...any) {
 	slog.Error(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID)
+	s.logToDatabase(msg, entityID, args...)
 }
 
 // Debug logs a debug message to both console and database
@@ -145,7 +147,7 @@ func (s *Service) Debug(msg string, entityID string, args ...any) {
 	slog.Debug(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID)
+	s.logToDatabase(msg, entityID, args...)
 }
 
 // Warn logs a warning message to both console and database
@@ -157,20 +159,47 @@ func (s *Service) Warn(msg string, entityID string, args ...any) {
 	slog.Warn(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID)
+	s.logToDatabase(msg, entityID, args...)
+}
+
+// formatArgs formats args into a key=value string similar to slog output
+func formatArgs(args ...any) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for i := 0; i < len(args); i += 2 {
+		if i+1 < len(args) {
+			key := fmt.Sprintf("%v", args[i])
+			value := fmt.Sprintf("%v", args[i+1])
+			// Quote values that contain spaces, similar to slog
+			if strings.Contains(value, " ") {
+				value = fmt.Sprintf("%q", value)
+			}
+			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // logToDatabase writes the log entry to the database or buffers it
-func (s *Service) logToDatabase(msg string, entityID string) {
+func (s *Service) logToDatabase(msg string, entityID string, args ...any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Format the complete log text with args
+	logText := msg
+	if formattedArgs := formatArgs(args...); formattedArgs != "" {
+		logText = fmt.Sprintf("%s %s", msg, formattedArgs)
+	}
 
 	if s.db != nil {
 		// Database available, write directly
 		log := store.Log{
 			Timestamp: time.Now(),
 			EntityID:  entityID,
-			LogText:   msg,
+			LogText:   logText,
 		}
 
 		if err := s.db.Create(&log).Error; err != nil {
@@ -183,7 +212,7 @@ func (s *Service) logToDatabase(msg string, entityID string) {
 		bufferedLog := BufferedLog{
 			Timestamp: time.Now(),
 			EntityID:  entityID,
-			LogText:   msg,
+			LogText:   logText,
 		}
 
 		s.buffer[s.bufferHead] = bufferedLog

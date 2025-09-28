@@ -52,7 +52,7 @@ func TestBuffering(t *testing.T) {
 	}
 
 	// Verify log contents
-	expectedMessages := []string{"Buffered message 1", "Buffered message 2", "Buffered message 3"}
+	expectedMessages := []string{"Buffered message 1 entity_id=entity.test", "Buffered message 2", "Buffered message 3 entity_id=entity.another"}
 	expectedEntityIDs := []string{"entity.test", "", "entity.another"}
 
 	for i, log := range logs {
@@ -83,13 +83,13 @@ func TestCircularBuffer(t *testing.T) {
 	}
 
 	// Check that the oldest messages were overwritten
-	// Buffer should contain messages 2, 3, 4
+	// Buffer should contain messages 2, 3, 4 with their formatted args
+	expectedTexts := []string{"Message %d index=2", "Message %d index=3", "Message %d index=4"}
 	for i := 0; i < 3; i++ {
 		idx := (service.bufferHead - service.bufferCount + i + service.bufferSize) % service.bufferSize
 		bufferedLog := service.buffer[idx]
-		expectedText := "Message %d"
-		if bufferedLog.LogText != expectedText {
-			t.Errorf("Expected buffered message '%s', got '%s'", expectedText, bufferedLog.LogText)
+		if bufferedLog.LogText != expectedTexts[i] {
+			t.Errorf("Expected buffered message '%s', got '%s'", expectedTexts[i], bufferedLog.LogText)
 		}
 	}
 	service.mu.RUnlock()
@@ -124,7 +124,7 @@ func TestGlobalFunctions(t *testing.T) {
 		t.Errorf("Expected 4 logs from global functions, got %d", len(logs))
 	}
 
-	expectedMessages := []string{"Global info message", "Global error message", "Global debug message", "Global warn message"}
+	expectedMessages := []string{"Global info message entity_id=global.entity", "Global error message", "Global debug message entity_id=global.debug", "Global warn message entity_id=global.warn"}
 	expectedEntityIDs := []string{"global.entity", "", "global.debug", "global.warn"}
 
 	for i, log := range logs {
