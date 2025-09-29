@@ -14,7 +14,6 @@ import (
 
 type EntitySummary struct {
 	ID         string
-	Type       string
 	LastUpdate time.Time
 	LogCount   int64
 }
@@ -63,7 +62,7 @@ func runEntitiesCommand() error {
 
 	// Query entities and join with log counts
 	err = db.Table("entities").
-		Select("entities.id, entities.type, entities.updated_at as last_update, COALESCE(log_counts.count, 0) as log_count").
+		Select("entities.id, entities.updated_at as last_update, COALESCE(log_counts.count, 0) as log_count").
 		Joins("LEFT JOIN (SELECT entity_id, COUNT(*) as count FROM logs GROUP BY entity_id) as log_counts ON entities.id = log_counts.entity_id").
 		Order("entities.id").
 		Scan(&entities).Error
@@ -82,12 +81,11 @@ func printEntitiesTable(entities []EntitySummary) error {
 	}
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.Header("Entity ID", "Type", "Last Updated", "Log Entries")
+	table.Header("Entity ID", "Last Updated", "Log Entries")
 
 	for _, entity := range entities {
 		err := table.Append(
 			entity.ID,
-			entity.Type,
 			entity.LastUpdate.Format("2006-01-02 15:04:05"),
 			strconv.FormatInt(entity.LogCount, 10),
 		)

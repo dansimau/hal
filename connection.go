@@ -191,7 +191,6 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		UpdateAll: true,
 	}).Create(&store.Entity{
 		ID:    event.Event.EventData.EntityID,
-		Type:  entity.GetID(),
 		State: event.Event.EventData.NewState,
 	})
 

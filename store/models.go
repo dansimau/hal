@@ -15,7 +15,6 @@ type Entity struct {
 	Model
 
 	ID    string `gorm:"primaryKey"`
-	Type  string
 	State *homeassistant.State `gorm:"serializer:json"`
 }
 
