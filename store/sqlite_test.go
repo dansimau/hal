@@ -41,4 +41,15 @@ func TestSQLitePragmaConfiguration(t *testing.T) {
 	if syncMode != "1" { // NORMAL = 1
 		t.Errorf("Expected synchronous to be '1' (NORMAL), got: %s", syncMode)
 	}
+
+	// Verify auto_vacuum mode is set
+	var autoVacuum string
+	err = db.Raw("PRAGMA auto_vacuum").Scan(&autoVacuum).Error
+	if err != nil {
+		t.Fatalf("Failed to query auto_vacuum: %v", err)
+	}
+
+	if autoVacuum != "1" { // FULL = 1
+		t.Errorf("Expected auto_vacuum to be '1' (FULL), got: %s", autoVacuum)
+	}
 }

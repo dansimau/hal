@@ -6,7 +6,9 @@ import (
 )
 
 func Open(path string) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	// Add auto_vacuum pragma to DSN - must be set before database is created
+	dsn := path + "?_pragma=auto_vacuum(FULL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, err
 	}
