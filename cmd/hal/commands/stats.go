@@ -68,16 +68,16 @@ func runStatsCommand(dbPath string) error {
 
 		if strings.Contains(string(metricType), "time") {
 			// Timer metrics - calculate p99
-			summary.LastMinute = calculateP99(db, metricType, time.Minute)
-			summary.LastHour = calculateP99(db, metricType, time.Hour)
-			summary.LastDay = calculateP99(db, metricType, 24*time.Hour)
-			summary.LastMonth = calculateP99(db, metricType, 30*24*time.Hour)
+			summary.LastMinute = calculateP99(db.DB, metricType, time.Minute)
+			summary.LastHour = calculateP99(db.DB, metricType, time.Hour)
+			summary.LastDay = calculateP99(db.DB, metricType, 24*time.Hour)
+			summary.LastMonth = calculateP99(db.DB, metricType, 30*24*time.Hour)
 		} else {
 			// Counter metrics - sum
-			summary.LastMinute = sumMetrics(db, metricType, time.Minute)
-			summary.LastHour = sumMetrics(db, metricType, time.Hour)
-			summary.LastDay = sumMetrics(db, metricType, 24*time.Hour)
-			summary.LastMonth = sumMetrics(db, metricType, 30*24*time.Hour)
+			summary.LastMinute = sumMetrics(db.DB, metricType, time.Minute)
+			summary.LastHour = sumMetrics(db.DB, metricType, time.Hour)
+			summary.LastDay = sumMetrics(db.DB, metricType, 24*time.Hour)
+			summary.LastMonth = sumMetrics(db.DB, metricType, 30*24*time.Hour)
 		}
 
 		summaries = append(summaries, summary)

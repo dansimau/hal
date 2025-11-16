@@ -27,6 +27,9 @@ func TestLoggingService(t *testing.T) {
 	service.Info("System started", "")
 	service.Debug("Debug message", "")
 
+	// Wait for async writes to complete
+	db.WaitForWrites()
+
 	// Verify logs were written to database
 	var logs []store.Log
 	if err := db.Find(&logs).Error; err != nil {
@@ -74,6 +77,9 @@ func TestLogPruning(t *testing.T) {
 	
 	// Add a new log
 	service.Info("New log", "")
+
+	// Wait for async writes to complete
+	db.WaitForWrites()
 
 	// Manually trigger pruning
 	cutoffTime := time.Now().Add(-service.retentionTime)

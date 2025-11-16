@@ -21,7 +21,7 @@ import (
 // TODO: Rename "Connection" to something more descriptive.
 type Connection struct {
 	config Config
-	db     *gorm.DB
+	db     *store.Store
 
 	automations map[string][]Automation
 	entities    map[string]EntityInterface
@@ -133,6 +133,10 @@ func (h *Connection) Close() {
 	h.metricsService.Stop()
 	logger.StopDefault()
 	h.homeAssistant.Close()
+	// Flush pending database writes before closing
+	if err := h.db.Close(); err != nil {
+		logger.Error("Failed to close database", "", "error", err)
+	}
 }
 
 func (h *Connection) syncStates() error {
@@ -186,12 +190,16 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		entity.SetState(*event.Event.EventData.NewState)
 	}
 
-	// Update database
-	h.db.Clauses(clause.OnConflict{
-		UpdateAll: true,
-	}).Create(&store.Entity{
-		ID:    event.Event.EventData.EntityID,
-		State: event.Event.EventData.NewState,
+	// Update database asynchronously
+	entityID := event.Event.EventData.EntityID
+	newState := event.Event.EventData.NewState
+	h.db.EnqueueWrite(func(db *gorm.DB) error {
+		return db.Clauses(clause.OnConflict{
+			UpdateAll: true,
+		}).Create(&store.Entity{
+			ID:    entityID,
+			State: newState,
+		}).Error
 	})
 
 	// Prevent loops by not running automations that originate from hal

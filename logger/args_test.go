@@ -22,6 +22,9 @@ func TestLoggingWithArgs(t *testing.T) {
 	service.Debug("Processing item", "item.abc123", "item_id", "abc123", "status", "pending", "priority", "high")
 	service.Warn("Rate limit exceeded", "", "endpoint", "/api/users", "rate", "100/min", "user_agent", "Mozilla/5.0 Chrome")
 
+	// Wait for async writes to complete
+	db.WaitForWrites()
+
 	// Verify logs were written to database with args
 	var logs []store.Log
 	if err := db.Order("id").Find(&logs).Error; err != nil {

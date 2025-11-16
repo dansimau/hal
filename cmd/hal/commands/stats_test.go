@@ -10,11 +10,10 @@ import (
 
 	"github.com/dansimau/hal/store"
 	"github.com/spf13/cobra"
-	"gorm.io/gorm"
 	"gotest.tools/v3/assert"
 )
 
-func setupTestDBForStats(t *testing.T) *gorm.DB {
+func setupTestDBForStats(t *testing.T) *store.Store {
 	t.Helper()
 
 	db, err := store.Open(":memory:")
@@ -55,7 +54,7 @@ func TestStatsCommandWithEmptyDatabase(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Close the temp database so the command can open it
-	sqlDB, err := tempDB.DB()
+	sqlDB, err := tempDB.DB.DB()
 	assert.NilError(t, err)
 	sqlDB.Close()
 
@@ -116,7 +115,7 @@ func TestStatsCommandWithSampleData(t *testing.T) {
 	}
 
 	// Close database so command can open it
-	sqlDB, err := db.DB()
+	sqlDB, err := db.DB.DB()
 	assert.NilError(t, err)
 	sqlDB.Close()
 
@@ -215,11 +214,11 @@ func TestSumMetrics(t *testing.T) {
 	}
 
 	// Test sum for last minute (should be 2)
-	result := sumMetrics(db, store.MetricTypeAutomationTriggered, time.Minute)
+	result := sumMetrics(db.DB, store.MetricTypeAutomationTriggered, time.Minute)
 	assert.Equal(t, result, int64(2))
 
 	// Test sum for last 5 minutes (should be 3)
-	result = sumMetrics(db, store.MetricTypeAutomationTriggered, 5*time.Minute)
+	result = sumMetrics(db.DB, store.MetricTypeAutomationTriggered, 5*time.Minute)
 	assert.Equal(t, result, int64(3))
 }
 
@@ -246,7 +245,7 @@ func TestCalculateP99(t *testing.T) {
 	}
 
 	// Calculate p99
-	result := calculateP99(db, store.MetricTypeTickProcessingTime, time.Minute)
+	result := calculateP99(db.DB, store.MetricTypeTickProcessingTime, time.Minute)
 
 	// Should return the highest value (100ms) as p99
 	assert.Equal(t, result, "100.0ms")
@@ -256,7 +255,7 @@ func TestCalculateP99EmptyDataset(t *testing.T) {
 	db := setupTestDBForStats(t)
 
 	// Test with empty dataset
-	result := calculateP99(db, store.MetricTypeTickProcessingTime, time.Minute)
+	result := calculateP99(db.DB, store.MetricTypeTickProcessingTime, time.Minute)
 	assert.Equal(t, result, "0ms")
 }
 

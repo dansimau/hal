@@ -21,7 +21,7 @@ type BufferedLog struct {
 
 // Service handles logging to both console and database
 type Service struct {
-	db            *gorm.DB
+	db            *store.Store
 	pruneInterval time.Duration // How often to prune old logs (default: daily)
 	retentionTime time.Duration // How long to keep logs (default: 1 month)
 	stopChan      chan struct{}
@@ -50,20 +50,20 @@ func NewService() *Service {
 }
 
 // NewServiceWithDB creates a new logging service with database
-func NewServiceWithDB(db *gorm.DB) *Service {
+func NewServiceWithDB(db *store.Store) *Service {
 	s := NewService()
 	s.SetDatabase(db)
 	return s
 }
 
 // SetDatabase sets the database for the logging service and flushes buffered logs
-func (s *Service) SetDatabase(db *gorm.DB) {
+func (s *Service) SetDatabase(db *store.Store) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.db = db
 
-	// Flush buffered logs to database
+	// Flush buffered logs to database asynchronously
 	if s.bufferCount > 0 {
 		flushCount := s.bufferCount
 		for i := 0; i < s.bufferCount; i++ {
@@ -74,9 +74,9 @@ func (s *Service) SetDatabase(db *gorm.DB) {
 				EntityID:  bufferedLog.EntityID,
 				LogText:   bufferedLog.LogText,
 			}
-			if err := s.db.Create(&log).Error; err != nil {
-				slog.Error("Failed to write buffered log to database", "error", err, "message", bufferedLog.LogText)
-			}
+			s.db.EnqueueWrite(func(db *gorm.DB) error {
+				return db.Create(&log).Error
+			})
 		}
 		s.bufferCount = 0
 		slog.Info("Flushed buffered logs to database", "count", flushCount)
@@ -185,8 +185,9 @@ func formatArgs(args ...any) string {
 
 // logToDatabase writes the log entry to the database or buffers it
 func (s *Service) logToDatabase(msg string, entityID string, args ...any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	db := s.db
+	s.mu.RUnlock()
 
 	// Format the complete log text with args
 	logText := msg
@@ -194,21 +195,20 @@ func (s *Service) logToDatabase(msg string, entityID string, args ...any) {
 		logText = fmt.Sprintf("%s %s", msg, formattedArgs)
 	}
 
-	if s.db != nil {
-		// Database available, write directly
-		log := store.Log{
-			Timestamp: time.Now(),
-			EntityID:  entityID,
-			LogText:   logText,
-		}
-
-		if err := s.db.Create(&log).Error; err != nil {
-			slog.Error("Failed to write log to database", "error", err, "message", msg)
-			s.lastError = err
-			s.errorCount++
-		}
+	if db != nil {
+		// Database available, write asynchronously
+		timestamp := time.Now()
+		db.EnqueueWrite(func(gdb *gorm.DB) error {
+			log := store.Log{
+				Timestamp: timestamp,
+				EntityID:  entityID,
+				LogText:   logText,
+			}
+			return gdb.Create(&log).Error
+		})
 	} else {
 		// No database, add to circular buffer
+		s.mu.Lock()
 		bufferedLog := BufferedLog{
 			Timestamp: time.Now(),
 			EntityID:  entityID,
@@ -221,6 +221,7 @@ func (s *Service) logToDatabase(msg string, entityID string, args ...any) {
 		if s.bufferCount < s.bufferSize {
 			s.bufferCount++
 		}
+		s.mu.Unlock()
 	}
 }
 
@@ -240,12 +241,15 @@ func (s *Service) pruneLogs() {
 
 			if db != nil {
 				cutoffTime := time.Now().Add(-s.retentionTime)
-				result := db.Where("timestamp < ?", cutoffTime).Delete(&store.Log{})
-				if result.Error != nil {
-					slog.Error("Failed to prune old logs", "error", result.Error)
-				} else if result.RowsAffected > 0 {
-					slog.Info("Pruned old logs", "count", result.RowsAffected, "cutoff", cutoffTime)
-				}
+				db.EnqueueWrite(func(gdb *gorm.DB) error {
+					result := gdb.Where("timestamp < ?", cutoffTime).Delete(&store.Log{})
+					if result.Error != nil {
+						slog.Error("Failed to prune old logs", "error", result.Error)
+					} else if result.RowsAffected > 0 {
+						slog.Info("Pruned old logs", "count", result.RowsAffected, "cutoff", cutoffTime)
+					}
+					return result.Error
+				})
 			}
 		}
 	}
@@ -281,7 +285,7 @@ func Warn(msg string, entityID string, args ...any) {
 }
 
 // SetDefaultDatabase sets the database for the global default logger
-func SetDefaultDatabase(db *gorm.DB) {
+func SetDefaultDatabase(db *store.Store) {
 	defaultLogger.SetDatabase(db)
 }
 

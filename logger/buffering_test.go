@@ -41,6 +41,9 @@ func TestBuffering(t *testing.T) {
 		t.Errorf("Expected buffer to be empty after setting database, got %d items", bufferCount)
 	}
 
+	// Wait for async writes to complete
+	db.WaitForWrites()
+
 	// Verify logs were written to database
 	var logs []store.Log
 	if err := db.Find(&logs).Error; err != nil {

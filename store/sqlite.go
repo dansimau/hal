@@ -5,7 +5,13 @@ import (
 	"gorm.io/gorm"
 )
 
-func Open(path string) (*gorm.DB, error) {
+// Store wraps the database connection and async writer.
+type Store struct {
+	*gorm.DB
+	asyncWriter *AsyncWriter
+}
+
+func Open(path string) (*Store, error) {
 	// Add auto_vacuum pragma to DSN - must be set before database is created
 	dsn := path + "?_pragma=auto_vacuum(FULL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -25,5 +31,32 @@ func Open(path string) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	return db, nil
+	// Create and start async writer
+	asyncWriter := NewAsyncWriter(db)
+	asyncWriter.Start()
+
+	return &Store{
+		DB:          db,
+		asyncWriter: asyncWriter,
+	}, nil
+}
+
+// EnqueueWrite adds a write operation to the async queue.
+func (s *Store) EnqueueWrite(op WriteOperation) {
+	s.asyncWriter.Enqueue(op)
+}
+
+// WaitForWrites blocks until all queued writes complete (for testing).
+func (s *Store) WaitForWrites() {
+	s.asyncWriter.WaitForWrites()
+}
+
+// Close gracefully shuts down the store, flushing pending writes.
+func (s *Store) Close() error {
+	s.asyncWriter.Shutdown()
+	sqlDB, err := s.DB.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }

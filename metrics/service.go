@@ -9,16 +9,16 @@ import (
 )
 
 // Service handles metrics collection and pruning
-// Writes directly to SQLite, leveraging SQLite's WAL mode for performance
+// Uses async write queue for non-blocking performance
 type Service struct {
-	db            *gorm.DB
+	db            *store.Store
 	pruneInterval time.Duration // How often to prune old metrics (default: daily)
 	retentionTime time.Duration // How long to keep metrics (default: 3 months)
 	stopChan      chan struct{}
 }
 
 // NewService creates a new metrics service
-func NewService(db *gorm.DB) *Service {
+func NewService(db *store.Store) *Service {
 	return &Service{
 		db:            db,
 		pruneInterval: 24 * time.Hour,     // Prune daily
@@ -49,10 +49,10 @@ func (s *Service) RecordCounter(metricType store.MetricType, entityID, automatio
 		EntityID:       entityID,
 		AutomationName: automationName,
 	}
-	
-	if err := s.db.Create(&metric).Error; err != nil {
-		logger.Error("Failed to record counter metric", "", "error", err, "type", metricType)
-	}
+
+	s.db.EnqueueWrite(func(db *gorm.DB) error {
+		return db.Create(&metric).Error
+	})
 }
 
 // RecordTimer records a timer metric (value = duration in nanoseconds)
@@ -65,29 +65,32 @@ func (s *Service) RecordTimer(metricType store.MetricType, duration time.Duratio
 		EntityID:       entityID,
 		AutomationName: automationName,
 	}
-	
-	if err := s.db.Create(&metric).Error; err != nil {
-		logger.Error("Failed to record timer metric", "", "error", err, "type", metricType)
-	}
+
+	s.db.EnqueueWrite(func(db *gorm.DB) error {
+		return db.Create(&metric).Error
+	})
 }
 
 // pruneMetrics runs in a goroutine to periodically remove old metrics
 func (s *Service) pruneMetrics() {
 	ticker := time.NewTicker(s.pruneInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
 			cutoffTime := time.Now().Add(-s.retentionTime)
-			result := s.db.Where("timestamp < ?", cutoffTime).Delete(&store.Metric{})
-			if result.Error != nil {
-				logger.Error("Failed to prune old metrics", "", "error", result.Error)
-			} else if result.RowsAffected > 0 {
-				logger.Info("Pruned old metrics", "", "count", result.RowsAffected, "cutoff", cutoffTime)
-			}
+			s.db.EnqueueWrite(func(db *gorm.DB) error {
+				result := db.Where("timestamp < ?", cutoffTime).Delete(&store.Metric{})
+				if result.Error != nil {
+					logger.Error("Failed to prune old metrics", "", "error", result.Error)
+				} else if result.RowsAffected > 0 {
+					logger.Info("Pruned old metrics", "", "count", result.RowsAffected, "cutoff", cutoffTime)
+				}
+				return result.Error
+			})
 		}
 	}
 }

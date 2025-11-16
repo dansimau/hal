@@ -5,29 +5,28 @@ import (
 	"time"
 
 	"github.com/dansimau/hal/store"
-	"gorm.io/gorm"
 	"gotest.tools/v3/assert"
 )
 
-func setupTestDB(t *testing.T) *gorm.DB {
+func setupTestDB(t *testing.T) *store.Store {
 	t.Helper()
 
 	// Use in-memory database for testing
 	db, err := store.Open(":memory:")
 	assert.NilError(t, err)
-	
+
 	// Ensure the Metric table is created (store.Open should handle this via AutoMigrate)
 	// But let's be explicit for tests
 	err = db.AutoMigrate(&store.Metric{})
 	assert.NilError(t, err)
-	
+
 	return db
 }
 
 func TestNewService(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
-	
+
 	assert.Assert(t, service != nil)
 	assert.Equal(t, service.pruneInterval, 24*time.Hour)
 	assert.Equal(t, service.retentionTime, 90*24*time.Hour) // 3 months
@@ -36,16 +35,19 @@ func TestNewService(t *testing.T) {
 func TestRecordCounter(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
-	
-	// Record a counter metric (writes directly to database)
+
+	// Record a counter metric (writes asynchronously to database)
 	service.RecordCounter(store.MetricTypeAutomationTriggered, "test.entity", "test automation")
-	
+
+	// Wait for async write to complete
+	db.WaitForWrites()
+
 	// Verify metric was recorded
 	var metrics []store.Metric
 	result := db.Find(&metrics)
 	assert.NilError(t, result.Error)
 	assert.Equal(t, len(metrics), 1)
-	
+
 	savedMetric := metrics[0]
 	assert.Equal(t, savedMetric.MetricType, store.MetricTypeAutomationTriggered)
 	assert.Equal(t, savedMetric.Value, int64(1))
@@ -57,18 +59,21 @@ func TestRecordCounter(t *testing.T) {
 func TestRecordTimer(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
-	
+
 	duration := 150 * time.Millisecond
-	
-	// Record a timer metric (writes directly to database)
+
+	// Record a timer metric (writes asynchronously to database)
 	service.RecordTimer(store.MetricTypeTickProcessingTime, duration, "test.entity", "")
-	
+
+	// Wait for async write to complete
+	db.WaitForWrites()
+
 	// Verify metric was recorded
 	var metrics []store.Metric
 	result := db.Find(&metrics)
 	assert.NilError(t, result.Error)
 	assert.Equal(t, len(metrics), 1)
-	
+
 	metric := metrics[0]
 	assert.Equal(t, metric.MetricType, store.MetricTypeTickProcessingTime)
 	assert.Equal(t, metric.Value, duration.Nanoseconds())
@@ -79,12 +84,15 @@ func TestRecordTimer(t *testing.T) {
 func TestMultipleMetrics(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
-	
-	// Record multiple metrics (writes directly to database)
+
+	// Record multiple metrics (writes asynchronously to database)
 	service.RecordCounter(store.MetricTypeAutomationTriggered, "entity1", "automation1")
 	service.RecordCounter(store.MetricTypeAutomationTriggered, "entity2", "automation2")
 	service.RecordCounter(store.MetricTypeAutomationTriggered, "entity3", "automation3")
-	
+
+	// Wait for async writes to complete
+	db.WaitForWrites()
+
 	// Verify all metrics were recorded
 	var count int64
 	db.Model(&store.Metric{}).Count(&count)
@@ -94,41 +102,41 @@ func TestMultipleMetrics(t *testing.T) {
 func TestPruneOldMetrics(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
-	
+
 	// Create old and new metrics (100 days old vs 1 hour old)
 	oldTime := time.Now().Add(-100 * 24 * time.Hour) // 100 days old (older than 90 day retention)
 	newTime := time.Now().Add(-1 * time.Hour)        // 1 hour old
-	
+
 	oldMetric := store.Metric{
 		Timestamp:  oldTime,
 		MetricType: store.MetricTypeAutomationTriggered,
 		Value:      1,
 	}
-	
+
 	newMetric := store.Metric{
 		Timestamp:  newTime,
 		MetricType: store.MetricTypeAutomationTriggered,
 		Value:      1,
 	}
-	
+
 	// Insert metrics directly into database
 	assert.NilError(t, db.Create(&oldMetric).Error)
 	assert.NilError(t, db.Create(&newMetric).Error)
-	
+
 	// Verify both metrics exist
 	var count int64
 	db.Model(&store.Metric{}).Count(&count)
 	assert.Equal(t, count, int64(2))
-	
+
 	// Manually trigger pruning with the default retention time (90 days)
 	cutoffTime := time.Now().Add(-service.retentionTime)
 	result := db.Where("timestamp < ?", cutoffTime).Delete(&store.Metric{})
 	assert.NilError(t, result.Error)
-	
+
 	// Only new metric should remain
 	db.Model(&store.Metric{}).Count(&count)
 	assert.Equal(t, count, int64(1))
-	
+
 	// Verify it's the new metric
 	var remaining store.Metric
 	db.First(&remaining)
@@ -138,14 +146,14 @@ func TestPruneOldMetrics(t *testing.T) {
 func TestServiceStartStop(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
-	
+
 	// Test that service can start and stop cleanly
 	service.Start()
-	
+
 	// Brief pause to let pruning goroutine start
 	time.Sleep(10 * time.Millisecond)
-	
+
 	service.Stop()
-	
+
 	// Verify no errors occurred (success is just clean start/stop)
 }
