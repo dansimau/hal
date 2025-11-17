@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"log/slog"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 func TestBuffering(t *testing.T) {
 	// Create logging service without database
 	service := NewService()
+	service.SetLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 	// Test logging without database (should buffer)
 	service.Info("Buffered message 1", "entity.test")
@@ -107,6 +109,7 @@ func TestGlobalFunctions(t *testing.T) {
 
 	// Set database on global logger
 	GetDefaultLogger().SetDatabase(db)
+	SetDefaultLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 	// Test global functions
 	Info("Global info message", "global.entity")

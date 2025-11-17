@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/dansimau/hal/store"
@@ -15,6 +16,7 @@ func TestLoggingWithArgs(t *testing.T) {
 
 	// Create logging service
 	service := NewServiceWithDB(db)
+	service.SetLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 	// Test logging with various args
 	service.Info("User logged in", "user.test", "user_id", 123, "action", "login", "ip", "192.168.1.1")

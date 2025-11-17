@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"log/slog"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ func TestLoggingService(t *testing.T) {
 
 	// Create logging service
 	service := NewServiceWithDB(db)
+	service.SetLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 	// Test logging with entity ID
 	entityID := "light.kitchen"

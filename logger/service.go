@@ -23,8 +23,9 @@ type BufferedLog struct {
 type Service struct {
 	db            *store.Store
 	pruneInterval time.Duration // How often to prune old logs (default: daily)
-	retentionTime time.Duration // How long to keep logs (default: 1 month)
+	retentionTime time.Duration // How long to keep logs
 	stopChan      chan struct{}
+	level         slog.Level // Minimum log level for database logging
 
 	// Buffering for when database is not available
 	mu          sync.RWMutex
@@ -41,9 +42,10 @@ type Service struct {
 // NewService creates a new logging service
 func NewService() *Service {
 	return &Service{
-		pruneInterval: 24 * time.Hour,      // Prune daily
-		retentionTime: 30 * 24 * time.Hour, // Keep 1 month of logs
+		pruneInterval: 24 * time.Hour, // Prune daily
+		retentionTime: 7 * 24 * time.Hour,
 		stopChan:      make(chan struct{}),
+		level:         slog.LevelInfo, // Default to Info level
 		bufferSize:    1000,
 		buffer:        make([]BufferedLog, 1000),
 	}
@@ -81,6 +83,13 @@ func (s *Service) SetDatabase(db *store.Store) {
 		s.bufferCount = 0
 		slog.Info("Flushed buffered logs to database", "count", flushCount)
 	}
+}
+
+// SetLevel sets the minimum log level for database logging
+func (s *Service) SetLevel(level slog.Level) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.level = level
 }
 
 // Start begins the log pruning goroutine
@@ -123,7 +132,7 @@ func (s *Service) Info(msg string, entityID string, args ...any) {
 	slog.Info(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID, args...)
+	s.logToDatabase(slog.LevelInfo, msg, entityID, args...)
 }
 
 // Error logs an error message to both console and database
@@ -135,7 +144,7 @@ func (s *Service) Error(msg string, entityID string, args ...any) {
 	slog.Error(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID, args...)
+	s.logToDatabase(slog.LevelError, msg, entityID, args...)
 }
 
 // Debug logs a debug message to both console and database
@@ -147,7 +156,7 @@ func (s *Service) Debug(msg string, entityID string, args ...any) {
 	slog.Debug(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID, args...)
+	s.logToDatabase(slog.LevelDebug, msg, entityID, args...)
 }
 
 // Warn logs a warning message to both console and database
@@ -159,7 +168,7 @@ func (s *Service) Warn(msg string, entityID string, args ...any) {
 	slog.Warn(msg, args...)
 
 	// Log to database
-	s.logToDatabase(msg, entityID, args...)
+	s.logToDatabase(slog.LevelWarn, msg, entityID, args...)
 }
 
 // formatArgs formats args into a key=value string similar to slog output
@@ -184,10 +193,16 @@ func formatArgs(args ...any) string {
 }
 
 // logToDatabase writes the log entry to the database or buffers it
-func (s *Service) logToDatabase(msg string, entityID string, args ...any) {
+func (s *Service) logToDatabase(level slog.Level, msg string, entityID string, args ...any) {
 	s.mu.RLock()
 	db := s.db
+	minLevel := s.level
 	s.mu.RUnlock()
+
+	// Check if this log level should be written to database
+	if level < minLevel {
+		return
+	}
 
 	// Format the complete log text with args
 	logText := msg
@@ -287,6 +302,11 @@ func Warn(msg string, entityID string, args ...any) {
 // SetDefaultDatabase sets the database for the global default logger
 func SetDefaultDatabase(db *store.Store) {
 	defaultLogger.SetDatabase(db)
+}
+
+// SetDefaultLevel sets the minimum log level for the global default logger
+func SetDefaultLevel(level slog.Level) {
+	defaultLogger.SetLevel(level)
 }
 
 // StartDefault starts the global default logger

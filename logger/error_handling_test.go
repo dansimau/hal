@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/dansimau/hal/store"
@@ -17,6 +18,7 @@ func TestDatabaseErrorHandling(t *testing.T) {
 		}
 
 		service := NewServiceWithDB(db)
+		service.SetLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 		// Test that all logging methods succeed without database errors
 		service.Info("Test info message", "test.entity")
@@ -83,6 +85,7 @@ func TestDatabaseErrorHandling(t *testing.T) {
 
 		// Set database on global logger
 		SetDefaultDatabase(db)
+		SetDefaultLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 		// Test global functions succeed without database errors
 		Info("Global info", "global.entity")
@@ -141,6 +144,7 @@ func TestDatabaseFailureErrorHandling(t *testing.T) {
 
 	// Create service with the closed database
 	service := NewServiceWithDB(storeDB)
+	service.SetLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 	// Test that logging methods don't crash when database fails
 	// With async writes, errors are logged by the async writer, not tracked in the logger service
@@ -191,6 +195,7 @@ func TestErrorTrackingFromGlobalFunctions(t *testing.T) {
 
 	// Set this failing database on the global logger
 	SetDefaultDatabase(storeDB)
+	SetDefaultLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 	// Test that global functions don't crash when database fails
 	// With async writes, errors are logged by the async writer, not tracked in the logger service
