@@ -46,7 +46,7 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 		return ErrEntityNotRegistered
 	}
 
-	logger.Debug("Turning on light", entityID)
+	logger.Info("Turning on light", entityID)
 
 	data := map[string]any{
 		"entity_id": []string{l.GetID()},

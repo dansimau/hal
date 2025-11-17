@@ -182,7 +182,7 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		return
 	}
 
-	logger.Debug("State changed for", event.Event.EventData.EntityID)
+	logger.Info("State changed for", event.Event.EventData.EntityID)
 
 	fmt.Fprintf(os.Stderr, "Diff:\n%s\n", cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
 
