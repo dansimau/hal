@@ -15,6 +15,7 @@ import (
 // BufferedLog represents a log entry waiting to be written to database
 type BufferedLog struct {
 	Timestamp time.Time
+	Level     string
 	EntityID  string
 	LogText   string
 }
@@ -73,6 +74,7 @@ func (s *Service) SetDatabase(db *store.Store) {
 			bufferedLog := s.buffer[idx]
 			log := store.Log{
 				Timestamp: bufferedLog.Timestamp,
+				Level:     bufferedLog.Level,
 				EntityID:  bufferedLog.EntityID,
 				LogText:   bufferedLog.LogText,
 			}
@@ -210,12 +212,16 @@ func (s *Service) logToDatabase(level slog.Level, msg string, entityID string, a
 		logText = fmt.Sprintf("%s %s", msg, formattedArgs)
 	}
 
+	// Convert slog.Level to string
+	levelStr := level.String()
+
 	if db != nil {
 		// Database available, write asynchronously
 		timestamp := time.Now()
 		db.EnqueueWrite(func(gdb *gorm.DB) error {
 			log := store.Log{
 				Timestamp: timestamp,
+				Level:     levelStr,
 				EntityID:  entityID,
 				LogText:   logText,
 			}
@@ -226,6 +232,7 @@ func (s *Service) logToDatabase(level slog.Level, msg string, entityID string, a
 		s.mu.Lock()
 		bufferedLog := BufferedLog{
 			Timestamp: time.Now(),
+			Level:     levelStr,
 			EntityID:  entityID,
 			LogText:   logText,
 		}
