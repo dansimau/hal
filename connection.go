@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dansimau/hal/hassws"
@@ -33,6 +34,11 @@ type Connection struct {
 	metricsService *metrics.Service
 
 	*SunTimes
+
+	shutdownCh        chan struct{}
+	closeOnce         sync.Once
+	reconnectInterval time.Duration
+	reconnectAttempts atomic.Int32
 }
 
 // ConnectionBinder is an interface that can be implemented by entities to bind
@@ -60,6 +66,12 @@ func NewConnection(cfg Config) *Connection {
 	// Set the database on the global logger
 	logger.SetDefaultDatabase(db)
 
+	// Set reconnect interval with default
+	reconnectInterval := cfg.ReconnectInterval
+	if reconnectInterval == 0 {
+		reconnectInterval = 10 * time.Second
+	}
+
 	return &Connection{
 		config:         cfg,
 		db:             db,
@@ -70,11 +82,24 @@ func NewConnection(cfg Config) *Connection {
 		entities:    make(map[string]EntityInterface),
 
 		SunTimes: NewSunTimes(cfg.Location),
+
+		shutdownCh:        make(chan struct{}),
+		reconnectInterval: reconnectInterval,
 	}
 }
 
 func (h *Connection) CallService(msg hassws.CallServiceRequest) (hassws.CallServiceResponse, error) {
 	return h.homeAssistant.CallService(msg)
+}
+
+// GetReconnectAttempts returns the number of reconnection attempts made.
+func (h *Connection) GetReconnectAttempts() int {
+	return int(h.reconnectAttempts.Load())
+}
+
+// ResetReconnectAttempts resets the reconnection attempt counter (useful for tests).
+func (h *Connection) ResetReconnectAttempts() {
+	h.reconnectAttempts.Store(0)
 }
 
 // FindEntities recursively finds and registers all entities in a struct, map, or slice.
@@ -108,12 +133,8 @@ func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 	}
 }
 
-// Start connects to the Home Assistant websocket and starts listening for events.
-func (h *Connection) Start() error {
-	// Start services
-	h.metricsService.Start()
-	logger.StartDefault()
-
+// connect establishes the WebSocket connection, subscribes to events, and syncs states.
+func (h *Connection) connect() error {
 	if err := h.homeAssistant.Connect(); err != nil {
 		return err
 	}
@@ -129,14 +150,82 @@ func (h *Connection) Start() error {
 	return nil
 }
 
-func (h *Connection) Close() {
-	h.metricsService.Stop()
-	logger.StopDefault()
-	h.homeAssistant.Close()
-	// Flush pending database writes before closing
-	if err := h.db.Close(); err != nil {
-		logger.Error("Failed to close database", "", "error", err)
+// Start connects to the Home Assistant websocket and starts listening for events.
+// This method is blocking and will retry connections indefinitely with 10-second intervals.
+func (h *Connection) Start() error {
+	// Start services
+	h.metricsService.Start()
+	logger.StartDefault()
+
+	// Create disconnection signal channel
+	disconnectedCh := make(chan struct{}, 1)
+
+	// Set up disconnection callback
+	h.homeAssistant.SetOnDisconnected(func() {
+		select {
+		case disconnectedCh <- struct{}{}:
+		default:
+			// Channel already has a signal, skip
+		}
+	})
+
+	// Initial connection attempt
+	if err := h.connect(); err != nil {
+		logger.Error("Initial connection failed", "", "error", err)
+		// Signal reconnection to start retry loop
+		disconnectedCh <- struct{}{}
+	} else {
+		logger.Info("Initial connection successful", "")
 	}
+
+	// Reconnection loop
+	for {
+		select {
+		case <-disconnectedCh:
+			logger.Warn("Connection lost, will retry", "", "interval", h.reconnectInterval)
+
+			time.Sleep(h.reconnectInterval)
+
+			h.reconnectAttempts.Add(1)
+			attempt := h.GetReconnectAttempts()
+
+			logger.Info("Attempting to reconnect", "", "attempt", attempt)
+			if err := h.connect(); err != nil {
+				logger.Error("Reconnection failed", "", "error", err)
+				// Signal reconnection for retry
+				select {
+				case disconnectedCh <- struct{}{}:
+				default:
+				}
+				continue
+			}
+
+			logger.Info("Reconnection successful", "")
+
+		case <-h.shutdownCh:
+			logger.Info("Shutdown signal received, stopping reconnection loop", "")
+			return nil
+		}
+	}
+}
+
+func (h *Connection) Close() {
+	h.closeOnce.Do(func() {
+		// Signal shutdown to stop reconnection loop
+		close(h.shutdownCh)
+
+		// Close WebSocket connection
+		h.homeAssistant.Close()
+
+		// Stop services
+		h.metricsService.Stop()
+		logger.StopDefault()
+
+		// Flush pending database writes before closing
+		if err := h.db.Close(); err != nil {
+			logger.Error("Failed to close database", "", "error", err)
+		}
+	})
 }
 
 func (h *Connection) syncStates() error {

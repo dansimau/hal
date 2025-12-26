@@ -7,5 +7,5 @@ lint:
 .PHONY: test
 test:
 	which go-test-coverage || go install github.com/vladopajic/go-test-coverage/v2@latest
-	go test -v ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./... -json | python3 testutil/colourise-go-test-output.py
+	go test -v ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./... -json | python3 testutil/colourise-go-test-output.py >/dev/null
 	go-test-coverage --config=./.testcoverage.yaml

@@ -83,6 +83,13 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listen() {
+	// Clear subscribers when connection closes
+	defer func() {
+		s.lock.Lock()
+		s.subscribers = nil
+		s.lock.Unlock()
+	}()
+
 	for {
 		_, messageBytes, err := s.websocket.ReadMessage()
 		if err != nil {
@@ -239,6 +246,22 @@ func (s *Server) Close() error {
 	)
 }
 
+// DisconnectClient forcibly closes the WebSocket connection to simulate network failure.
+// Unlike Close(), this does not send a graceful close message.
+// Returns nil if connection is already closed.
+func (s *Server) DisconnectClient() error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	if s.websocket == nil {
+		return nil
+	}
+
+	// Attempt to close - ignore errors if already closed
+	_ = s.websocket.Close()
+	return nil
+}
+
 func (s *Server) shutdown() error {
 	var errs []error
 
@@ -296,4 +319,11 @@ func (s *Server) SendEvent(event homeassistant.Event) {
 			Event: event,
 		})
 	}
+}
+
+// GetSubscriptionCount returns the number of active event subscriptions.
+func (s *Server) GetSubscriptionCount() int {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return len(s.subscribers)
 }

@@ -3,6 +3,7 @@ package hal
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -10,9 +11,10 @@ import (
 const configFilename = "hal.yaml"
 
 type Config struct {
-	HomeAssistant HomeAssistantConfig `yaml:"homeAssistant"`
-	Location      LocationConfig      `yaml:"location"`
-	DatabasePath  string              `yaml:"databasePath"`
+	HomeAssistant     HomeAssistantConfig `yaml:"homeAssistant"`
+	Location          LocationConfig      `yaml:"location"`
+	DatabasePath      string              `yaml:"databasePath"`
+	ReconnectInterval time.Duration       `yaml:"reconnectInterval"`
 }
 
 type HomeAssistantConfig struct {

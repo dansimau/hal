@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,8 +15,18 @@ import (
 
 const readTimeoutSeconds = 3
 
+// Connection states
+type connectionState int
+
+const (
+	stateDisconnected connectionState = iota
+	stateConnecting
+	stateConnected
+)
+
 var (
 	ErrAuthInvalid        = errors.New("invalid access token")
+	ErrNotConnected       = errors.New("websocket not connected")
 	ErrReadTimeout        = errors.New("read timeout")
 	ErrUnexpectedResponse = errors.New("unexpected response")
 )
@@ -33,6 +42,10 @@ type Client struct {
 	// the response there.
 	responses map[int]chan []byte
 	mutex     sync.RWMutex
+
+	// Connection state tracking
+	state          atomic.Value // connectionState
+	onDisconnected func()
 }
 
 type ClientConfig struct {
@@ -41,10 +54,31 @@ type ClientConfig struct {
 }
 
 func NewClient(config ClientConfig) *Client {
-	return &Client{
+	c := &Client{
 		cfg:       config,
 		responses: make(map[int]chan []byte),
 	}
+	c.setState(stateDisconnected)
+	return c
+}
+
+// getState returns the current connection state
+func (c *Client) getState() connectionState {
+	v := c.state.Load()
+	if v == nil {
+		return stateDisconnected
+	}
+	return v.(connectionState)
+}
+
+// setState updates the connection state
+func (c *Client) setState(s connectionState) {
+	c.state.Store(s)
+}
+
+// SetOnDisconnected sets the callback to be called when the connection is lost
+func (c *Client) SetOnDisconnected(fn func()) {
+	c.onDisconnected = fn
 }
 
 func (c *Client) authenticate() error {
@@ -86,18 +120,23 @@ func (c *Client) authenticate() error {
 }
 
 func (c *Client) Close() error {
+	c.setState(stateDisconnected)
 	return c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
 }
 
 func (c *Client) shutdown() error {
+	c.setState(stateDisconnected)
 	return c.conn.Close()
 }
 
 func (c *Client) Connect() error {
+	c.setState(stateConnecting)
+
 	logger.Info("Connecting", "", "host", c.cfg.Host)
 
 	conn, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://%s/api/websocket", c.cfg.Host), nil)
 	if err != nil {
+		c.setState(stateDisconnected)
 		return err
 	}
 
@@ -106,8 +145,11 @@ func (c *Client) Connect() error {
 	c.conn = conn
 
 	if err := c.authenticate(); err != nil {
+		c.setState(stateDisconnected)
 		return err
 	}
+
+	c.setState(stateConnected)
 
 	// Start listening for messages
 	go c.listen()
@@ -119,11 +161,35 @@ func (c *Client) Connect() error {
 func (c *Client) listen() {
 	logger.Info("Connection established", "")
 
+	defer func() {
+		// Close all pending response channels to unblock waiting callers
+		c.mutex.Lock()
+		for msgID, ch := range c.responses {
+			// Safely close channel (recover from panic if already closed)
+			func() {
+				defer func() {
+					_ = recover() // Ignore panic if channel already closed
+				}()
+				close(ch)
+			}()
+			delete(c.responses, msgID)
+		}
+		c.mutex.Unlock()
+
+		// Set state to disconnected
+		c.setState(stateDisconnected)
+
+		// Signal disconnection to the Connection layer for reconnection
+		if c.onDisconnected != nil {
+			c.onDisconnected()
+		}
+	}()
+
 	for {
 		_, msgBytes, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				log.Println("Received close message, bye")
+				logger.Info("Received close message", "")
 
 				if err := c.shutdown(); err != nil {
 					logger.Error("Error during shutdown", "", "error", err)
@@ -132,7 +198,9 @@ func (c *Client) listen() {
 				return
 			}
 
-			panic(fmt.Errorf("error reading from websocket: %w", err))
+			// Log error and return gracefully instead of panicking
+			logger.Error("Error reading from websocket", "", "error", err)
+			return
 		}
 
 		logger.Debug("Received message", "", "msg", string(msgBytes))
@@ -318,6 +386,10 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 }
 
 func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error) {
+	if c.getState() != stateConnected {
+		return CallServiceResponse{}, ErrNotConnected
+	}
+
 	reqBytes, err := json.Marshal(msg)
 	if err != nil {
 		return CallServiceResponse{}, err
@@ -341,6 +413,10 @@ func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error
 }
 
 func (c *Client) GetStates() ([]homeassistant.State, error) {
+	if c.getState() != stateConnected {
+		return nil, ErrNotConnected
+	}
+
 	msg := CommandMessage{
 		ID:   c.nextMsgID(),
 		Type: MessageTypeGetStates,
