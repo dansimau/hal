@@ -2,7 +2,6 @@ package hal
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -271,9 +270,7 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		return
 	}
 
-	logger.Info("State changed for", event.Event.EventData.EntityID)
-
-	fmt.Fprintf(os.Stderr, "Diff:\n%s\n", cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
+	logger.Info("State changed for", event.Event.EventData.EntityID, "diff", cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
 
 	if event.Event.EventData.NewState != nil {
 		entity.SetState(*event.Event.EventData.NewState)
@@ -300,9 +297,12 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 
 	// Dispatch automations
 	for _, automation := range h.automations[event.Event.EventData.EntityID] {
-		logger.Info("Running automation", event.Event.EventData.EntityID, "name", automation.Name())
+		// Create context with tracing metadata
+		ctx := NewAutomationContext(event.Event.EventData.EntityID, automation.Name())
+
+		logger.InfoContext(ctx, "Running automation")
 		// Record automation triggered metric
 		h.metricsService.RecordCounter(store.MetricTypeAutomationTriggered, event.Event.EventData.EntityID, automation.Name())
-		automation.Action(entity)
+		automation.Action(ctx, entity)
 	}
 }

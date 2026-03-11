@@ -1,6 +1,7 @@
 package hal_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func TestMetricsInstrumentation(t *testing.T) {
 	automation := hal.NewAutomation().
 		WithName("motion_light_automation").
 		WithEntities(sensor).
-		WithAction(func(trigger hal.EntityInterface) {
+		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
 			light.TurnOn()
 		})
 	
@@ -57,7 +58,7 @@ func TestMetricsAutomationTriggered(t *testing.T) {
 	automation := hal.NewAutomation().
 		WithName("test_automation").
 		WithEntities(sensor).
-		WithAction(func(trigger hal.EntityInterface) {
+		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
 			automationExecuted = true
 		})
 	
@@ -93,7 +94,7 @@ func TestMetricsIntegrationBasicScenarios(t *testing.T) {
 	automation1 := hal.NewAutomation().
 		WithName("automation_1").
 		WithEntities(sensor).
-		WithAction(func(trigger hal.EntityInterface) {
+		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
 			automation1Executed = true
 			light1.TurnOn()
 		})
@@ -101,7 +102,7 @@ func TestMetricsIntegrationBasicScenarios(t *testing.T) {
 	automation2 := hal.NewAutomation().
 		WithName("automation_2").
 		WithEntities(sensor).
-		WithAction(func(trigger hal.EntityInterface) {
+		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
 			automation2Executed = true
 			light2.TurnOn()
 		})

@@ -1,5 +1,7 @@
 package hal
 
+import "context"
+
 type Automation interface {
 	// Name is a friendly name for the automation, used in logs and stats.
 	Name() string
@@ -9,12 +11,12 @@ type Automation interface {
 	// automation will be trigged.
 	Entities() Entities
 
-	// Action is called when the automation is triggered.
-	Action(trigger EntityInterface)
+	// Action is called when the automation is triggered with context for tracing.
+	Action(ctx context.Context, trigger EntityInterface)
 }
 
 type AutomationConfig struct {
-	action   func(trigger EntityInterface)
+	action   func(ctx context.Context, trigger EntityInterface)
 	entities Entities
 	name     string
 }
@@ -27,15 +29,15 @@ func (c *AutomationConfig) Entities() Entities {
 	return c.entities
 }
 
-func (c *AutomationConfig) Action(trigger EntityInterface) {
-	c.action(trigger)
+func (c *AutomationConfig) Action(ctx context.Context, trigger EntityInterface) {
+	c.action(ctx, trigger)
 }
 
 func (c *AutomationConfig) Name() string {
 	return c.name
 }
 
-func (c *AutomationConfig) WithAction(action func(trigger EntityInterface)) *AutomationConfig {
+func (c *AutomationConfig) WithAction(action func(ctx context.Context, trigger EntityInterface)) *AutomationConfig {
 	c.action = action
 
 	if c.name == "" {

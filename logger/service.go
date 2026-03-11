@@ -2,6 +2,7 @@
 package logger
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -173,6 +174,113 @@ func (s *Service) Warn(msg string, entityID string, args ...any) {
 	s.logToDatabase(slog.LevelWarn, msg, entityID, args...)
 }
 
+// InfoContext logs with entity ID and automation name extracted from context
+func (s *Service) InfoContext(ctx context.Context, msg string, args ...any) {
+	entityID := getEntityIDFromContext(ctx)
+	automationName := getAutomationNameFromContext(ctx)
+
+	// Add automation name to args if present and not already included
+	if automationName != "" {
+		hasAutomation := false
+		for i := 0; i < len(args); i += 2 {
+			if i < len(args) && args[i] == "automation" {
+				hasAutomation = true
+				break
+			}
+		}
+		if !hasAutomation {
+			args = append([]any{"automation", automationName}, args...)
+		}
+	}
+
+	s.Info(msg, entityID, args...)
+}
+
+// ErrorContext logs errors with context
+func (s *Service) ErrorContext(ctx context.Context, msg string, args ...any) {
+	entityID := getEntityIDFromContext(ctx)
+	automationName := getAutomationNameFromContext(ctx)
+
+	if automationName != "" {
+		hasAutomation := false
+		for i := 0; i < len(args); i += 2 {
+			if i < len(args) && args[i] == "automation" {
+				hasAutomation = true
+				break
+			}
+		}
+		if !hasAutomation {
+			args = append([]any{"automation", automationName}, args...)
+		}
+	}
+
+	s.Error(msg, entityID, args...)
+}
+
+// DebugContext logs debug messages with context
+func (s *Service) DebugContext(ctx context.Context, msg string, args ...any) {
+	entityID := getEntityIDFromContext(ctx)
+	automationName := getAutomationNameFromContext(ctx)
+
+	if automationName != "" {
+		hasAutomation := false
+		for i := 0; i < len(args); i += 2 {
+			if i < len(args) && args[i] == "automation" {
+				hasAutomation = true
+				break
+			}
+		}
+		if !hasAutomation {
+			args = append([]any{"automation", automationName}, args...)
+		}
+	}
+
+	s.Debug(msg, entityID, args...)
+}
+
+// WarnContext logs warnings with context
+func (s *Service) WarnContext(ctx context.Context, msg string, args ...any) {
+	entityID := getEntityIDFromContext(ctx)
+	automationName := getAutomationNameFromContext(ctx)
+
+	if automationName != "" {
+		hasAutomation := false
+		for i := 0; i < len(args); i += 2 {
+			if i < len(args) && args[i] == "automation" {
+				hasAutomation = true
+				break
+			}
+		}
+		if !hasAutomation {
+			args = append([]any{"automation", automationName}, args...)
+		}
+	}
+
+	s.Warn(msg, entityID, args...)
+}
+
+// getEntityIDFromContext extracts the entity ID from context
+func getEntityIDFromContext(ctx context.Context) string {
+	type contextKey string
+	const entityIDKey contextKey = "entity_id"
+
+	if entityID, ok := ctx.Value(entityIDKey).(string); ok {
+		return entityID
+	}
+	return ""
+}
+
+// getAutomationNameFromContext extracts the automation name from context
+func getAutomationNameFromContext(ctx context.Context) string {
+	type contextKey string
+	const automationNameKey contextKey = "automation_name"
+
+	if name, ok := ctx.Value(automationNameKey).(string); ok {
+		return name
+	}
+	return ""
+}
+
 // formatArgs formats args into a key=value string similar to slog output
 func formatArgs(args ...any) string {
 	if len(args) == 0 {
@@ -304,6 +412,26 @@ func Debug(msg string, entityID string, args ...any) {
 // Warn logs a warning message using the global default logger
 func Warn(msg string, entityID string, args ...any) {
 	defaultLogger.Warn(msg, entityID, args...)
+}
+
+// InfoContext logs using the global default logger with context
+func InfoContext(ctx context.Context, msg string, args ...any) {
+	defaultLogger.InfoContext(ctx, msg, args...)
+}
+
+// ErrorContext logs using the global default logger with context
+func ErrorContext(ctx context.Context, msg string, args ...any) {
+	defaultLogger.ErrorContext(ctx, msg, args...)
+}
+
+// DebugContext logs using the global default logger with context
+func DebugContext(ctx context.Context, msg string, args ...any) {
+	defaultLogger.DebugContext(ctx, msg, args...)
+}
+
+// WarnContext logs using the global default logger with context
+func WarnContext(ctx context.Context, msg string, args ...any) {
+	defaultLogger.WarnContext(ctx, msg, args...)
 }
 
 // SetDefaultDatabase sets the database for the global default logger

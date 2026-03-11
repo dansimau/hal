@@ -1,9 +1,10 @@
 package halautomations
 
 import (
-	"log"
+	"context"
 
 	"github.com/dansimau/hal"
+	"github.com/dansimau/hal/logger"
 )
 
 // PrintDebug prints state changes for the specified entities.
@@ -24,8 +25,8 @@ func (p *PrintDebug) Entities() hal.Entities {
 	return p.entities
 }
 
-func (p *PrintDebug) Action(_ hal.EntityInterface) {
+func (p *PrintDebug) Action(ctx context.Context, _ hal.EntityInterface) {
 	for _, entity := range p.entities {
-		log.Printf("[%s] Entity %s state: %+v", p.name, entity.GetID(), entity.GetState())
+		logger.InfoContext(ctx, "Entity state", "entity", entity.GetID(), "state", entity.GetState())
 	}
 }

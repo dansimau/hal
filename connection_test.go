@@ -1,6 +1,7 @@
 package hal_test
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 
@@ -51,7 +52,7 @@ func TestLoopProtection(t *testing.T) {
 		hal.NewAutomation().
 			WithName("test.automation").
 			WithEntities(testEntity).
-			WithAction(func(_ hal.EntityInterface) {
+			WithAction(func(_ context.Context, _ hal.EntityInterface) {
 				automationTriggered.Add(1)
 			}),
 	)

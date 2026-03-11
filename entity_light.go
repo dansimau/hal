@@ -1,6 +1,7 @@
 package hal
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -15,7 +16,9 @@ type LightInterface interface {
 	GetBrightness() float64
 	IsOn() bool
 	TurnOn(attributes ...map[string]any) error
+	TurnOnContext(ctx context.Context, attributes ...map[string]any) error
 	TurnOff() error
+	TurnOffContext(ctx context.Context) error
 }
 
 type Light struct {
@@ -74,6 +77,40 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 	return nil
 }
 
+func (l *Light) TurnOnContext(ctx context.Context, attributes ...map[string]any) error {
+	if l.connection == nil {
+		logger.ErrorContext(ctx, "Light not registered")
+
+		return ErrEntityNotRegistered
+	}
+
+	logger.InfoContext(ctx, "Turning on light", "attributes", attributes)
+
+	data := map[string]any{
+		"entity_id": []string{l.GetID()},
+	}
+
+	for _, attribute := range attributes {
+		for k, v := range attribute {
+			data[k] = v
+		}
+	}
+
+	_, err := l.connection.CallService(hassws.CallServiceRequest{
+		Type:    hassws.MessageTypeCallService,
+		Domain:  "light",
+		Service: "turn_on",
+		Data:    data,
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "Error turning on light", "error", err)
+
+		return err
+	}
+
+	return nil
+}
+
 func (l *Light) TurnOff() error {
 	entityID := l.GetID()
 	if l.connection == nil {
@@ -97,6 +134,34 @@ func (l *Light) TurnOff() error {
 	if err != nil {
 		entityID := l.GetID()
 		logger.Error("Error turning off light", entityID, "error", err)
+
+		return err
+	}
+
+	return nil
+}
+
+func (l *Light) TurnOffContext(ctx context.Context) error {
+	if l.connection == nil {
+		logger.ErrorContext(ctx, "Light not registered")
+
+		return ErrEntityNotRegistered
+	}
+
+	logger.InfoContext(ctx, "Turning off light")
+
+	data := map[string]any{
+		"entity_id": []string{l.GetID()},
+	}
+
+	_, err := l.connection.CallService(hassws.CallServiceRequest{
+		Type:    hassws.MessageTypeCallService,
+		Domain:  "light",
+		Service: "turn_off",
+		Data:    data,
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "Error turning off light", "error", err)
 
 		return err
 	}
@@ -175,11 +240,47 @@ func (lg LightGroup) TurnOn(attributes ...map[string]any) error {
 	return nil
 }
 
+func (lg LightGroup) TurnOnContext(ctx context.Context, attributes ...map[string]any) error {
+	var errs []error
+
+	for _, l := range lg {
+		if err := l.TurnOnContext(ctx, attributes...); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) == 1 {
+		return errs[0]
+	} else if len(errs) > 1 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
 func (lg LightGroup) TurnOff() error {
 	var errs []error
 
 	for _, l := range lg {
 		if err := l.TurnOff(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) == 1 {
+		return errs[0]
+	} else if len(errs) > 1 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+func (lg LightGroup) TurnOffContext(ctx context.Context) error {
+	var errs []error
+
+	for _, l := range lg {
+		if err := l.TurnOffContext(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}
