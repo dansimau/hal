@@ -30,8 +30,8 @@ const (
 // Metric represents a single metric data point
 type Metric struct {
 	ID             uint       `gorm:"primaryKey;autoIncrement"`
-	Timestamp      time.Time  `gorm:"index;not null"`
-	MetricType     MetricType `gorm:"not null;size:50"`
+	MetricType     MetricType `gorm:"index:idx_metric_type_timestamp,priority:1;not null;size:50"`
+	Timestamp      time.Time  `gorm:"index:idx_metric_type_timestamp,priority:2;not null"`
 	Value          int64      `gorm:"not null"` // For counters: 1, for timers: nanoseconds
 	EntityID       string     `gorm:"size:100"` // Optional: which entity triggered this
 	AutomationName string     `gorm:"size:100"` // Optional: which automation was involved
