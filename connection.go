@@ -270,7 +270,7 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		return
 	}
 
-	logger.Info("State changed for", event.Event.EventData.EntityID, "diff", cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
+	logger.InfoDiff("State changed for", event.Event.EventData.EntityID, cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
 
 	if event.Event.EventData.NewState != nil {
 		entity.SetState(*event.Event.EventData.NewState)

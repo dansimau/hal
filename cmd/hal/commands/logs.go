@@ -187,12 +187,31 @@ func printLogs(logs []store.Log, noColor bool) error {
 			}
 		}
 
-		// Format log text with colorized tags
+		// Format log text with colorized tags; for multiline entries (e.g. diffs)
+		// colorize the first line's tags and diff lines separately.
 		logText := log.LogText
+		firstLine, rest, hasRest := strings.Cut(logText, "\n")
 		if useColor {
-			logText = tagRegex.ReplaceAllStringFunc(logText, func(match string) string {
+			firstLine = tagRegex.ReplaceAllStringFunc(firstLine, func(match string) string {
 				return darkGrey(match)
 			})
+			if hasRest {
+				diffLines := strings.Split(rest, "\n")
+				for i, line := range diffLines {
+					switch {
+					case strings.HasPrefix(line, "+"):
+						diffLines[i] = green(line)
+					case strings.HasPrefix(line, "-"):
+						diffLines[i] = red(line)
+					}
+				}
+				rest = strings.Join(diffLines, "\n")
+			}
+		}
+		if hasRest {
+			logText = firstLine + "\n" + rest
+		} else {
+			logText = firstLine
 		}
 
 		fmt.Printf("%s %s%s %s\n",
