@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/dansimau/hal/store"
 	"github.com/fatih/color"
+	"github.com/hokaccha/go-prettyjson"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
@@ -196,16 +198,30 @@ func printLogs(logs []store.Log, noColor bool) error {
 				return darkGrey(match)
 			})
 			if hasRest {
-				diffLines := strings.Split(rest, "\n")
-				for i, line := range diffLines {
-					switch {
-					case strings.HasPrefix(line, "+"):
-						diffLines[i] = green(line)
-					case strings.HasPrefix(line, "-"):
-						diffLines[i] = red(line)
+				trimmed := strings.TrimSpace(rest)
+				if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+					// Re-colorise stored plain JSON
+					var v interface{}
+					if err := json.Unmarshal([]byte(rest), &v); err == nil {
+						formatter := prettyjson.NewFormatter()
+						formatter.Indent = 2
+						if b, err := formatter.Marshal(v); err == nil {
+							rest = string(b)
+						}
 					}
+				} else {
+					// Colorise as diff
+					diffLines := strings.Split(rest, "\n")
+					for i, line := range diffLines {
+						switch {
+						case strings.HasPrefix(line, "+"):
+							diffLines[i] = green(line)
+						case strings.HasPrefix(line, "-"):
+							diffLines[i] = red(line)
+						}
+					}
+					rest = strings.Join(diffLines, "\n")
 				}
-				rest = strings.Join(diffLines, "\n")
 			}
 		}
 		if hasRest {

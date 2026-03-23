@@ -203,7 +203,7 @@ func (c *Client) listen() {
 			return
 		}
 
-		logger.Debug("Received message", "", "msg", string(msgBytes))
+		logger.DebugJSON("Received message", "", string(msgBytes))
 
 		// Get message ID
 		var msg CommandMessage
@@ -248,7 +248,7 @@ func (c *Client) read(target any) error {
 		return err
 	}
 
-	logger.Debug("Received message", "", "msg", string(msgBytes))
+	logger.DebugJSON("Received message", "", string(msgBytes))
 
 	return json.Unmarshal(msgBytes, target)
 }
@@ -260,7 +260,7 @@ func (c *Client) send(msg any) error {
 		return err
 	}
 
-	logger.Debug("Writing message", "", "msg", string(msgBytes))
+	logger.DebugJSON("Writing message", "", string(msgBytes))
 
 	return c.conn.WriteMessage(websocket.TextMessage, msgBytes)
 }

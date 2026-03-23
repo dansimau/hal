@@ -3,6 +3,7 @@ package logger
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/dansimau/hal/store"
 	"github.com/fatih/color"
+	"github.com/hokaccha/go-prettyjson"
 	"gorm.io/gorm"
 )
 
@@ -217,6 +219,51 @@ func (s *Service) InfoDiff(msg string, entityID string, diff string, args ...any
 		logText = logText + "\n" + diff
 	}
 	s.writeLogText(slog.LevelInfo, entityID, logText)
+}
+
+// prettifyJSON returns a colored version for console and a plain indented version
+// for storage. If jsonData is not valid JSON both versions are the original string.
+func prettifyJSON(jsonData string) (colored, plain string) {
+	var v interface{}
+	if err := json.Unmarshal([]byte(jsonData), &v); err != nil {
+		return jsonData, jsonData
+	}
+
+	colorFormatter := prettyjson.NewFormatter()
+	colorFormatter.Indent = 2
+	if b, err := colorFormatter.Marshal(v); err == nil {
+		colored = string(b)
+	} else {
+		colored = jsonData
+	}
+
+	if b, err := json.MarshalIndent(v, "", "  "); err == nil {
+		plain = string(b)
+	} else {
+		plain = jsonData
+	}
+
+	return colored, plain
+}
+
+// DebugJSON logs a debug message with a JSON payload that is pretty-printed and
+// colorised for console output but stored as plain indented JSON in the database.
+func (s *Service) DebugJSON(msg string, entityID string, jsonData string, args ...any) {
+	consoleArgs := args
+	if entityID != "" {
+		consoleArgs = append([]any{"entity_id", entityID}, consoleArgs...)
+	}
+	slog.Debug(msg, consoleArgs...)
+
+	colored, plain := prettifyJSON(jsonData)
+	fmt.Fprintln(os.Stderr, colored)
+
+	logText := msg
+	if formattedArgs := formatArgs(args...); formattedArgs != "" {
+		logText = fmt.Sprintf("%s %s", msg, formattedArgs)
+	}
+	logText = logText + "\n" + plain
+	s.writeLogText(slog.LevelDebug, entityID, logText)
 }
 
 // InfoContext logs with entity ID and automation name extracted from context
@@ -497,6 +544,11 @@ func Debug(msg string, entityID string, args ...any) {
 // InfoDiff logs an info message with a diff using the global default logger
 func InfoDiff(msg string, entityID string, diff string, args ...any) {
 	defaultLogger.InfoDiff(msg, entityID, diff, args...)
+}
+
+// DebugJSON logs a debug message with a JSON payload using the global default logger
+func DebugJSON(msg string, entityID string, jsonData string, args ...any) {
+	defaultLogger.DebugJSON(msg, entityID, jsonData, args...)
 }
 
 // Warn logs a warning message using the global default logger
