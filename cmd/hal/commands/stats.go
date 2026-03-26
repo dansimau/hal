@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -102,31 +103,27 @@ func sumMetrics(db *gorm.DB, metricType store.MetricType, duration time.Duration
 
 func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Duration) string {
 	since := time.Now().Add(-duration)
+	var values []int64
 
-	var count int64
-	db.Model(&store.Metric{}).
-		Where("metric_type = ? AND timestamp > ?", metricType, since).
-		Count(&count)
-
-	if count == 0 {
-		return "0ms"
-	}
-
-	offset := int64(math.Ceil(float64(count)*0.99)) - 1
-	if offset < 0 {
-		offset = 0
-	}
-
-	var p99Nanos int64
 	db.Model(&store.Metric{}).
 		Select("value").
 		Where("metric_type = ? AND timestamp > ?", metricType, since).
-		Order("value ASC").
-		Limit(1).
-		Offset(int(offset)).
-		Scan(&p99Nanos)
+		Scan(&values)
 
-	return formatDuration(time.Duration(p99Nanos))
+	if len(values) == 0 {
+		return "0ms"
+	}
+
+	sort.Slice(values, func(i, j int) bool {
+		return values[i] < values[j]
+	})
+
+	index := int(math.Ceil(float64(len(values))*0.99)) - 1
+	if index < 0 {
+		index = 0
+	}
+
+	return formatDuration(time.Duration(values[index]))
 }
 
 func formatDuration(d time.Duration) string {
