@@ -256,7 +256,9 @@ func (s *Service) DebugJSON(msg string, entityID string, jsonData string, args .
 	slog.Debug(msg, consoleArgs...)
 
 	colored, plain := prettifyJSON(jsonData)
-	fmt.Fprintln(os.Stderr, colored)
+	if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		fmt.Fprintln(os.Stderr, colored)
+	}
 
 	logText := msg
 	if formattedArgs := formatArgs(args...); formattedArgs != "" {
