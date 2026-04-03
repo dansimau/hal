@@ -222,6 +222,16 @@ func (lg LightGroup) IsOn() bool {
 	return true
 }
 
+func (lg LightGroup) IsOff() bool {
+	for _, l := range lg {
+		if l.IsOn() {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (lg LightGroup) TurnOn(attributes ...map[string]any) error {
 	var errs []error
 

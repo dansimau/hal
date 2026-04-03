@@ -24,6 +24,17 @@ func NewTimer(name string) *Timer {
 	}
 }
 
+func (a *Timer) checkConditions(ctx context.Context) bool {
+	for i, condition := range a.conditions {
+		if !condition() {
+			logger.InfoContext(ctx, "Timer condition not met", "condition", i)
+			return false
+		}
+	}
+
+	return true
+}
+
 // Condition sets a condition that must be true for the timer to start.
 func (a *Timer) Condition(condition func() bool) *Timer {
 	a.conditions = append(a.conditions, condition)
@@ -59,6 +70,7 @@ func (a *Timer) startTimer(ctx context.Context) {
 
 	if a.timer == nil {
 		a.timer = time.AfterFunc(a.delay, func() {
+			logger.InfoContext(ctx, "Timer elapsed")
 			a.runAction(a.ctx)
 		})
 	} else {
@@ -75,8 +87,12 @@ func (a *Timer) stopTimer(ctx context.Context) {
 }
 
 func (a *Timer) runAction(ctx context.Context) {
-	logger.InfoContext(ctx, "Timer elapsed, executing action")
+	// Check conditions once more before executing action
+	if !a.checkConditions(ctx) {
+		return
+	}
 
+	logger.InfoContext(ctx, "Executing action")
 	a.action(ctx)
 }
 
@@ -89,13 +105,9 @@ func (a *Timer) Entities() hal.Entities {
 }
 
 func (a *Timer) Action(ctx context.Context, _ hal.EntityInterface) {
-	for i, condition := range a.conditions {
-		if !condition() {
-			logger.InfoContext(ctx, "Timer condition not met, stopping existing timer", "condition", i)
-			a.stopTimer(ctx)
-			return
-		}
+	if a.checkConditions(ctx) {
+		a.startTimer(ctx)
+	} else {
+		a.stopTimer(ctx)
 	}
-
-	a.startTimer(ctx)
 }
