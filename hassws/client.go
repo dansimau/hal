@@ -385,6 +385,55 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 	return nil
 }
 
+// SubscribeEventsRaw subscribes to home assistant events and passes the raw
+// JSON frame bytes to the handler instead of a parsed EventMessage. Useful
+// when callers need the unmodified payload (e.g. to display unknown fields).
+func (c *Client) SubscribeEventsRaw(eventType string, handler func([]byte)) error {
+	msg := subscribeEventsRequest{
+		ID:        c.nextMsgID(),
+		Type:      MessageTypeSubscribeEvents,
+		EventType: eventType,
+	}
+
+	reqBytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	responseChan, err := c.sendMessageStreamResponses(reqBytes)
+	if err != nil {
+		return err
+	}
+
+	resBytes, err := c.readMesssageFromChannel(responseChan)
+	if err != nil {
+		close(responseChan)
+
+		return err
+	}
+
+	var res subscribeEventsResponse
+	if err := json.Unmarshal(resBytes, &res); err != nil {
+		close(responseChan)
+
+		return err
+	}
+
+	if !res.Success {
+		close(responseChan)
+
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
+	}
+
+	go func(ch chan []byte) {
+		for b := range ch {
+			handler(b)
+		}
+	}(responseChan)
+
+	return nil
+}
+
 func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error) {
 	if c.getState() != stateConnected {
 		return CallServiceResponse{}, ErrNotConnected

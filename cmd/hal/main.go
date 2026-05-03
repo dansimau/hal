@@ -25,4 +25,5 @@ func init() {
 	rootCmd.AddCommand(commands.NewLogsCmd())
 	rootCmd.AddCommand(commands.NewEntitiesCmd())
 	rootCmd.AddCommand(commands.NewPruneCmd())
+	rootCmd.AddCommand(commands.NewEventsCmd())
 }

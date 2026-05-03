@@ -17,3 +17,4 @@ test-results.json
 **/*.db-shm
 
 .claude
+hal.yaml
