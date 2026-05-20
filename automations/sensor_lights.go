@@ -37,15 +37,18 @@ type SensorsTriggerLights struct {
 	turnsOnLights          []hal.LightInterface
 	turnsOffLights         []hal.LightInterface
 	turnsOffAfter          *time.Duration // optional: duration after which lights will turn off after being turned on
+	turnOffCooldownPeriod  time.Duration
 
-	dimLightsTimer     hal.Timer
-	humanOverrideTimer hal.Timer
-	turnOffTimer       hal.Timer
+	dimLightsTimer       hal.Timer
+	humanOverrideTimer   hal.Timer
+	turnOffTimer         hal.Timer
+	turnOffCooldownTimer hal.Timer
 }
 
 func NewSensorsTriggerLights() *SensorsTriggerLights {
 	return &SensorsTriggerLights{
 		dimLightsBeforeTurnOff: time.Second * 10,
+		turnOffCooldownPeriod:  time.Second * 10,
 		brightness:             255,
 	}
 }
@@ -62,6 +65,7 @@ func (a *SensorsTriggerLights) WithClock(c clock.Clock) *SensorsTriggerLights {
 	a.dimLightsTimer = *hal.NewTimer(c)
 	a.humanOverrideTimer = *hal.NewTimer(c)
 	a.turnOffTimer = *hal.NewTimer(c)
+	a.turnOffCooldownTimer = *hal.NewTimer(c)
 
 	return a
 }
@@ -144,6 +148,16 @@ func (a *SensorsTriggerLights) TurnsOffLights(lights ...hal.LightInterface) *Sen
 // turned on.
 func (a *SensorsTriggerLights) TurnsOffAfter(turnsOffAfter time.Duration) *SensorsTriggerLights {
 	a.turnsOffAfter = &turnsOffAfter
+
+	return a
+}
+
+// TurnOffCooldownPeriod sets a duration after the lights turn off during which
+// sensor state changes are ignored. Prevents the lights from flashing back on
+// immediately if motion is still present when the turn-off timer fires. Set to
+// 0 to disable.
+func (a *SensorsTriggerLights) TurnOffCooldownPeriod(duration time.Duration) *SensorsTriggerLights {
+	a.turnOffCooldownPeriod = duration
 
 	return a
 }
@@ -311,6 +325,12 @@ func (a *SensorsTriggerLights) handleSensorStateChange(ctx context.Context) {
 		return
 	}
 
+	if a.turnOffCooldownTimer.IsRunning() {
+		logger.InfoContext(ctx, "Turn off cooldown active, skipping")
+
+		return
+	}
+
 	if a.condition != nil && !a.condition() {
 		logger.InfoContext(ctx, "Condition not met, skipping")
 
@@ -344,19 +364,28 @@ func (a *SensorsTriggerLights) handleSensorStateChange(ctx context.Context) {
 func (a *SensorsTriggerLights) handleLightStateChanged(ctx context.Context) {
 	logger.InfoContext(ctx, "Light state change")
 
-	// Light was either turned on or off, or brightness changed or whatever,
-	// in which case we want to stop any further automations since the user has
-	// overridden it and we want to respect that.
+	// Connection-level dispatch (connection.go) drops state_changed events
+	// whose Context.UserID matches hal's configured user, so reaching this
+	// handler implies an external party (human or other integration) changed
+	// the light. Stop any pending timers so we respect their intent.
 	a.stopDimLightsTimer(ctx)
 	a.stopTurnOffTimer(ctx)
 
-	if a.humanOverrideFor != nil {
-		if a.lightsOn() {
+	if a.lightsOn() {
+		a.turnOffCooldownTimer.Cancel()
+
+		if a.humanOverrideFor != nil {
 			logger.InfoContext(ctx, "Light turned on, setting human override", "duration", a.humanOverrideFor.String())
 			a.humanOverrideTimer.Start(nil, *a.humanOverrideFor)
-		} else {
-			logger.InfoContext(ctx, "Light turned off, cancelling human override")
-			a.humanOverrideTimer.Cancel()
+		}
+	} else {
+		a.humanOverrideTimer.Cancel()
+
+		if a.turnOffCooldownPeriod > 0 {
+			logger.InfoContext(ctx, "Light turned off, starting turn off cooldown", "duration", a.turnOffCooldownPeriod.String())
+			a.turnOffCooldownTimer.StartContext(ctx, func(ctx context.Context) {
+				logger.InfoContext(ctx, "Turn off cooldown elapsed")
+			}, a.turnOffCooldownPeriod)
 		}
 	}
 }
