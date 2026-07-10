@@ -15,6 +15,15 @@ type Config struct {
 	Location          LocationConfig      `yaml:"location"`
 	DatabasePath      string              `yaml:"databasePath"`
 	ReconnectInterval time.Duration       `yaml:"reconnectInterval"`
+
+	// PingInterval is how often to send a heartbeat ping to Home Assistant to
+	// keep the connection active. Defaults to 30s if unset.
+	PingInterval time.Duration `yaml:"pingInterval"`
+
+	// ReadTimeout is how long to wait for any data from Home Assistant before
+	// treating the connection as stale and reconnecting. Should be larger than
+	// PingInterval. Defaults to 60s if unset.
+	ReadTimeout time.Duration `yaml:"readTimeout"`
 }
 
 type HomeAssistantConfig struct {

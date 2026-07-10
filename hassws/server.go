@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dansimau/hal/homeassistant"
@@ -33,6 +34,11 @@ type Server struct {
 	// authenticatedUserID stores the user ID of the authenticated client
 	authenticatedUserID string
 
+	// respondToPings controls whether the server replies to ping messages.
+	// Setting it to false simulates a "stuck" connection that remains open but
+	// stops delivering data, exercising the client's staleness detection.
+	respondToPings atomic.Bool
+
 	lock sync.RWMutex
 }
 
@@ -43,6 +49,8 @@ func NewServer(validUsers map[string]string) (*Server, error) {
 		},
 		validUsers: validUsers,
 	}
+
+	server.respondToPings.Store(true)
 
 	server.http.Handler = http.HandlerFunc(server.handler)
 
@@ -195,6 +203,17 @@ func (s *Server) listen() {
 				// crash.
 				Result: json.RawMessage("[]"),
 			})
+
+		case MessageTypePing:
+			// Simulate a stuck connection by not responding when disabled.
+			if !s.respondToPings.Load() {
+				continue
+			}
+
+			s.SendMessage(CommandMessage{
+				ID:   cmd.ID,
+				Type: MessageTypePong,
+			})
 		default:
 			panic("[Server] Unknown message type: " + cmd.Type)
 		}
@@ -319,6 +338,13 @@ func (s *Server) SendEvent(event homeassistant.Event) {
 			Event: event,
 		})
 	}
+}
+
+// SetRespondToPings controls whether the server replies to ping messages.
+// Passing false simulates a "stuck" connection that remains open but stops
+// delivering data.
+func (s *Server) SetRespondToPings(respond bool) {
+	s.respondToPings.Store(respond)
 }
 
 // GetSubscriptionCount returns the number of active event subscriptions.
