@@ -20,10 +20,11 @@ const (
 	// Assistant to keep the connection active and prove it is still alive.
 	defaultPingInterval = 30 * time.Second
 
-	// defaultReadTimeout is how long we wait to receive any data (including
-	// pong responses) before considering the connection stale and closing it
-	// so it can be re-established. Must be larger than defaultPingInterval.
-	defaultReadTimeout = 60 * time.Second
+	// writeTimeout bounds how long a single websocket write may block. Without
+	// it, a half-open or blackholed connection could wedge a heartbeat write
+	// (or any other write) indefinitely while holding writeMutex, preventing
+	// reconnection and shutdown.
+	writeTimeout = 10 * time.Second
 )
 
 // Connection states
@@ -73,8 +74,9 @@ type ClientConfig struct {
 	PingInterval time.Duration
 
 	// ReadTimeout is how long to wait for any data before considering the
-	// connection stale and reconnecting. Defaults to defaultReadTimeout if
-	// zero. Should be larger than PingInterval.
+	// connection stale and reconnecting. When zero it defaults to twice
+	// PingInterval so pong responses keep the deadline alive. Must be larger
+	// than PingInterval, or a quiet connection would reconnect continuously.
 	ReadTimeout time.Duration
 }
 
@@ -83,8 +85,20 @@ func NewClient(config ClientConfig) *Client {
 		config.PingInterval = defaultPingInterval
 	}
 
+	// Derive the read timeout from the ping interval so a custom PingInterval
+	// larger than the default read timeout does not cause continuous
+	// reconnects on quiet connections.
 	if config.ReadTimeout == 0 {
-		config.ReadTimeout = defaultReadTimeout
+		config.ReadTimeout = 2 * config.PingInterval
+	}
+
+	// Guard against a misconfiguration where the read deadline would expire
+	// before a heartbeat pong could arrive.
+	if config.ReadTimeout <= config.PingInterval {
+		logger.Warn("ReadTimeout must be larger than PingInterval; adjusting", "",
+			"pingInterval", config.PingInterval, "readTimeout", config.ReadTimeout, "adjustedTo", 2*config.PingInterval)
+
+		config.ReadTimeout = 2 * config.PingInterval
 	}
 
 	c := &Client{
@@ -155,10 +169,7 @@ func (c *Client) authenticate() error {
 func (c *Client) Close() error {
 	c.setState(stateDisconnected)
 
-	c.writeMutex.Lock()
-	defer c.writeMutex.Unlock()
-
-	return c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
+	return c.writeMessage(c.conn, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
 }
 
 func (c *Client) shutdown() error {
@@ -241,10 +252,7 @@ func (c *Client) ping(conn *websocket.Conn) error {
 
 	logger.DebugJSON("Writing message", "", string(msgBytes))
 
-	c.writeMutex.Lock()
-	defer c.writeMutex.Unlock()
-
-	return conn.WriteMessage(websocket.TextMessage, msgBytes)
+	return c.writeMessage(conn, websocket.TextMessage, msgBytes)
 }
 
 // Listen for messages from the websocket and dispatch to listener channels.
@@ -254,6 +262,11 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 	defer func() {
 		// Signal the heartbeat goroutine for this connection to stop.
 		close(done)
+
+		// Close the underlying socket so a stale/half-open connection is not
+		// leaked server-side while we reconnect. Idempotent if already closed
+		// (e.g. by shutdown() or the heartbeat).
+		_ = conn.Close()
 
 		// Close all pending response channels to unblock waiting callers
 		c.mutex.Lock()
@@ -363,6 +376,21 @@ func (c *Client) read(target any) error {
 	return json.Unmarshal(msgBytes, target)
 }
 
+// writeMessage serializes writes to the given connection (gorilla forbids
+// concurrent writers) and bounds each write with a deadline. Without the
+// deadline, a half-open or blackholed connection could wedge a write
+// indefinitely while holding writeMutex, blocking reconnection and shutdown.
+func (c *Client) writeMessage(conn *websocket.Conn, messageType int, data []byte) error {
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+
+	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+
+	return conn.WriteMessage(messageType, data)
+}
+
 // Send a message to the websocket.
 func (c *Client) send(msg any) error {
 	msgBytes, err := json.Marshal(msg)
@@ -372,10 +400,7 @@ func (c *Client) send(msg any) error {
 
 	logger.DebugJSON("Writing message", "", string(msgBytes))
 
-	c.writeMutex.Lock()
-	defer c.writeMutex.Unlock()
-
-	return c.conn.WriteMessage(websocket.TextMessage, msgBytes)
+	return c.writeMessage(c.conn, websocket.TextMessage, msgBytes)
 }
 
 // Add a listener channel for a response to a specific sent message.

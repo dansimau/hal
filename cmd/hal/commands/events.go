@@ -51,8 +51,10 @@ func runEventsCommand(excludes []string, jqFilter string) error {
 	}
 
 	client := hassws.NewClient(hassws.ClientConfig{
-		Host:  cfg.HomeAssistant.Host,
-		Token: cfg.HomeAssistant.Token,
+		Host:         cfg.HomeAssistant.Host,
+		Token:        cfg.HomeAssistant.Token,
+		PingInterval: cfg.PingInterval,
+		ReadTimeout:  cfg.ReadTimeout,
 	})
 
 	if err := client.Connect(); err != nil {
