@@ -87,6 +87,21 @@ func NewClient(config ClientConfig) *Client {
 		config.PongTimeout = defaultPongTimeout
 	}
 
+	// The pong timeout must be greater than the ping interval, otherwise the
+	// read deadline can expire on a quiet-but-healthy connection before a ping
+	// has a chance to elicit a pong and refresh it, causing a reconnect loop.
+	if config.PongTimeout <= config.PingInterval {
+		logger.Warn(
+			"PongTimeout must be greater than PingInterval; adjusting",
+			"",
+			"pingInterval", config.PingInterval,
+			"pongTimeout", config.PongTimeout,
+			"adjustedPongTimeout", 2*config.PingInterval,
+		)
+
+		config.PongTimeout = 2 * config.PingInterval
+	}
+
 	c := &Client{
 		cfg:       config,
 		responses: make(map[int]chan []byte),
@@ -231,7 +246,14 @@ func (c *Client) keepAlive(conn *websocket.Conn, done chan struct{}) {
 			c.writeMutex.Unlock()
 
 			if err != nil {
-				logger.Error("Failed to send ping, connection may be dead", "", "error", err)
+				logger.Error("Failed to send ping, closing connection", "", "error", err)
+
+				// Force the read loop to error out so the disconnection is
+				// signalled and a reconnect happens. Without this, an
+				// asymmetric failure (writes failing but reads still
+				// arriving) would keep the client in stateConnected while
+				// service calls silently fail.
+				_ = conn.Close()
 
 				return
 			}
