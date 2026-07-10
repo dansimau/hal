@@ -249,6 +249,10 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 		// Signal the keepAlive goroutine for this connection to stop
 		close(done)
 
+		// Close the underlying connection so we don't leak the socket (and so
+		// the remote end sees the connection go away) before reconnecting.
+		_ = conn.Close()
+
 		// Close all pending response channels to unblock waiting callers
 		c.mutex.Lock()
 		for msgID, ch := range c.responses {

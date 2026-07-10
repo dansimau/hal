@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dansimau/hal/homeassistant"
@@ -32,6 +33,11 @@ type Server struct {
 	validUsers map[string]string
 	// authenticatedUserID stores the user ID of the authenticated client
 	authenticatedUserID string
+
+	// stuck, when true, makes the current connection stop responding to pings,
+	// simulating a connection that is open but unresponsive. It is reset for
+	// each new connection.
+	stuck atomic.Bool
 
 	lock sync.RWMutex
 }
@@ -70,7 +76,34 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.lock.Lock()
 	s.websocket = conn
+	// A new connection replaces any previous one, so reset subscribers.
+	s.subscribers = nil
+	s.lock.Unlock()
+
+	// A fresh connection is responsive by default. Install a ping handler that
+	// mimics gorilla's default behaviour (reply with a pong) unless the
+	// connection has been marked stuck via SimulateStuckConnection.
+	s.stuck.Store(false)
+	conn.SetPingHandler(func(appData string) error {
+		if s.stuck.Load() {
+			return nil
+		}
+
+		err := conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		if errors.Is(err, websocket.ErrCloseSent) {
+			return nil
+		}
+
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil
+		}
+
+		return err
+	})
+
 	defer conn.Close()
 
 	if err := s.handleAuthentication(conn); err != nil {
@@ -79,19 +112,23 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.listen()
+	s.listen(conn)
 }
 
-func (s *Server) listen() {
-	// Clear subscribers when connection closes
+func (s *Server) listen(conn *websocket.Conn) {
+	// Clear subscribers when connection closes, but only if this is still the
+	// active connection. A stale/stuck connection that closes after a client
+	// has already reconnected must not clobber the new connection's state.
 	defer func() {
 		s.lock.Lock()
-		s.subscribers = nil
+		if s.websocket == conn {
+			s.subscribers = nil
+		}
 		s.lock.Unlock()
 	}()
 
 	for {
-		_, messageBytes, err := s.websocket.ReadMessage()
+		_, messageBytes, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				log.Println("[Server] Received close message, bye")
@@ -251,12 +288,7 @@ func (s *Server) Close() error {
 // server, sends no further data). This is used to verify the client's
 // heartbeat / read-timeout based reconnection.
 func (s *Server) SimulateStuckConnection() {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.websocket != nil {
-		s.websocket.SetPingHandler(func(string) error { return nil })
-	}
+	s.stuck.Store(true)
 }
 
 // DisconnectClient forcibly closes the WebSocket connection to simulate network failure.
