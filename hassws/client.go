@@ -15,6 +15,12 @@ import (
 
 const readTimeoutSeconds = 3
 
+const (
+	defaultPingInterval      = 30 * time.Second
+	defaultPongTimeout       = 60 * time.Second
+	defaultInactivityTimeout = 10 * time.Minute
+)
+
 // Connection states
 type connectionState int
 
@@ -42,21 +48,59 @@ type Client struct {
 	// the response there.
 	responses map[int]chan []byte
 	mutex     sync.RWMutex
+	writeMu   sync.Mutex
 
 	// Connection state tracking
 	state          atomic.Value // connectionState
 	onDisconnected func()
+
+	pingInterval      time.Duration
+	pongTimeout       time.Duration
+	inactivityTimeout time.Duration
+	lastDataReceived  atomic.Int64
 }
 
 type ClientConfig struct {
 	Host  string
 	Token string
+
+	// PingInterval controls how often websocket ping frames are sent. Set to 0
+	// to use the default, or a negative value to disable heartbeat pings.
+	PingInterval time.Duration
+
+	// PongTimeout controls how long the client waits for any websocket frame or
+	// pong response before treating the connection as dead. Set to 0 to use the
+	// default, or a negative value to disable read deadlines.
+	PongTimeout time.Duration
+
+	// InactivityTimeout controls how long the client allows the Home Assistant
+	// event stream to be quiet before reconnecting. Set to 0 to use the default,
+	// or a negative value to disable application-level inactivity detection.
+	InactivityTimeout time.Duration
 }
 
 func NewClient(config ClientConfig) *Client {
+	pingInterval := config.PingInterval
+	if pingInterval == 0 {
+		pingInterval = defaultPingInterval
+	}
+
+	pongTimeout := config.PongTimeout
+	if pongTimeout == 0 {
+		pongTimeout = defaultPongTimeout
+	}
+
+	inactivityTimeout := config.InactivityTimeout
+	if inactivityTimeout == 0 {
+		inactivityTimeout = defaultInactivityTimeout
+	}
+
 	c := &Client{
-		cfg:       config,
-		responses: make(map[int]chan []byte),
+		cfg:               config,
+		responses:         make(map[int]chan []byte),
+		pingInterval:      pingInterval,
+		pongTimeout:       pongTimeout,
+		inactivityTimeout: inactivityTimeout,
 	}
 	c.setState(stateDisconnected)
 	return c
@@ -121,11 +165,22 @@ func (c *Client) authenticate() error {
 
 func (c *Client) Close() error {
 	c.setState(stateDisconnected)
+	if c.conn == nil {
+		return nil
+	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
 	return c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
 }
 
 func (c *Client) shutdown() error {
 	c.setState(stateDisconnected)
+	if c.conn == nil {
+		return nil
+	}
+
 	return c.conn.Close()
 }
 
@@ -151,8 +206,11 @@ func (c *Client) Connect() error {
 
 	c.setState(stateConnected)
 
-	// Start listening for messages
+	c.lastDataReceived.Store(time.Now().UnixNano())
+
+	// Start listening for messages and monitoring connection health.
 	go c.listen()
+	go c.heartbeat()
 
 	return nil
 }
@@ -185,6 +243,8 @@ func (c *Client) listen() {
 		}
 	}()
 
+	c.configureReadDeadline()
+
 	for {
 		_, msgBytes, err := c.conn.ReadMessage()
 		if err != nil {
@@ -202,6 +262,8 @@ func (c *Client) listen() {
 			logger.Error("Error reading from websocket", "", "error", err)
 			return
 		}
+
+		c.markDataReceived()
 
 		logger.DebugJSON("Received message", "", string(msgBytes))
 
@@ -253,6 +315,75 @@ func (c *Client) read(target any) error {
 	return json.Unmarshal(msgBytes, target)
 }
 
+func (c *Client) configureReadDeadline() {
+	if c.pongTimeout < 0 {
+		return
+	}
+
+	deadline := time.Now().Add(c.pongTimeout)
+	_ = c.conn.SetReadDeadline(deadline)
+	c.conn.SetPongHandler(func(string) error {
+		logger.Debug("Received websocket pong", "")
+		return c.conn.SetReadDeadline(time.Now().Add(c.pongTimeout))
+	})
+}
+
+func (c *Client) markDataReceived() {
+	c.lastDataReceived.Store(time.Now().UnixNano())
+	if c.pongTimeout >= 0 {
+		_ = c.conn.SetReadDeadline(time.Now().Add(c.pongTimeout))
+	}
+}
+
+func (c *Client) heartbeat() {
+	if c.pingInterval < 0 && c.inactivityTimeout < 0 {
+		return
+	}
+
+	interval := c.pingInterval
+	if interval < 0 || (c.inactivityTimeout > 0 && c.inactivityTimeout < interval) {
+		interval = c.inactivityTimeout
+	}
+	if interval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if c.getState() != stateConnected {
+			return
+		}
+
+		if c.inactivityTimeout > 0 {
+			last := time.Unix(0, c.lastDataReceived.Load())
+			if time.Since(last) > c.inactivityTimeout {
+				logger.Warn("No Home Assistant websocket data received; reconnecting", "", "timeout", c.inactivityTimeout)
+				if err := c.shutdown(); err != nil {
+					logger.Error("Error closing inactive websocket", "", "error", err)
+				}
+				return
+			}
+		}
+
+		if c.pingInterval < 0 {
+			continue
+		}
+
+		c.writeMu.Lock()
+		err := c.conn.WriteControl(websocket.PingMessage, []byte("hal heartbeat"), time.Now().Add(5*time.Second))
+		c.writeMu.Unlock()
+		if err != nil {
+			logger.Error("Error sending websocket ping", "", "error", err)
+			if err := c.shutdown(); err != nil {
+				logger.Error("Error closing websocket after ping failure", "", "error", err)
+			}
+			return
+		}
+	}
+}
+
 // Send a message to the websocket.
 func (c *Client) send(msg any) error {
 	msgBytes, err := json.Marshal(msg)
@@ -261,6 +392,9 @@ func (c *Client) send(msg any) error {
 	}
 
 	logger.DebugJSON("Writing message", "", string(msgBytes))
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 
 	return c.conn.WriteMessage(websocket.TextMessage, msgBytes)
 }

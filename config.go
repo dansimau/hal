@@ -11,10 +11,13 @@ import (
 const configFilename = "hal.yaml"
 
 type Config struct {
-	HomeAssistant     HomeAssistantConfig `yaml:"homeAssistant"`
-	Location          LocationConfig      `yaml:"location"`
-	DatabasePath      string              `yaml:"databasePath"`
-	ReconnectInterval time.Duration       `yaml:"reconnectInterval"`
+	HomeAssistant         HomeAssistantConfig `yaml:"homeAssistant"`
+	Location              LocationConfig      `yaml:"location"`
+	DatabasePath          string              `yaml:"databasePath"`
+	ReconnectInterval     time.Duration       `yaml:"reconnectInterval"`
+	WebSocketPingInterval time.Duration       `yaml:"webSocketPingInterval"`
+	WebSocketPongTimeout  time.Duration       `yaml:"webSocketPongTimeout"`
+	WebSocketIdleTimeout  time.Duration       `yaml:"webSocketIdleTimeout"`
 }
 
 type HomeAssistantConfig struct {

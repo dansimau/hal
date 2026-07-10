@@ -361,3 +361,36 @@ func TestReconnectionAttemptCounter(t *testing.T) {
 	waitForEventSubscription(t, server, 1)
 	assert.Equal(t, 1, conn.GetReconnectAttempts())
 }
+
+func TestReconnectsAfterWebSocketIdleTimeout(t *testing.T) {
+	conn, server, cleanup := newClientServerWithConfig(t, Config{
+		DatabasePath:          ":memory:",
+		ReconnectInterval:     50 * time.Millisecond,
+		WebSocketPingInterval: -1,
+		WebSocketPongTimeout:  -1,
+		WebSocketIdleTimeout:  150 * time.Millisecond,
+	})
+	defer cleanup()
+
+	waitForReconnection(t, conn, 1)
+	waitForEventSubscription(t, server, 1)
+
+	testEntity := NewEntity("test.idle")
+	conn.RegisterEntities(testEntity)
+
+	server.SendEvent(homeassistant.Event{
+		EventData: homeassistant.EventData{
+			EntityID: "test.idle",
+			NewState: &homeassistant.State{
+				EntityID: "test.idle",
+				State:    "awake",
+			},
+		},
+	})
+
+	waitFor(t, "event after idle reconnect", func() bool {
+		return testEntity.GetState().State == "awake"
+	}, func() {
+		t.Logf("Entity state: %v", testEntity.GetState())
+	})
+}
