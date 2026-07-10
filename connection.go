@@ -58,8 +58,10 @@ func NewConnection(cfg Config) *Connection {
 	}
 
 	api := hassws.NewClient(hassws.ClientConfig{
-		Host:  cfg.HomeAssistant.Host,
-		Token: cfg.HomeAssistant.Token,
+		Host:         cfg.HomeAssistant.Host,
+		Token:        cfg.HomeAssistant.Token,
+		PingInterval: cfg.PingInterval,
+		PongTimeout:  cfg.ReadTimeout,
 	})
 
 	// Set the database on the global logger

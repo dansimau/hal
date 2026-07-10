@@ -246,6 +246,19 @@ func (s *Server) Close() error {
 	)
 }
 
+// SimulateStuckConnection simulates a connection that is still open but no
+// longer responsive: it stops replying to ping frames (and, being a test
+// server, sends no further data). This is used to verify the client's
+// heartbeat / read-timeout based reconnection.
+func (s *Server) SimulateStuckConnection() {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	if s.websocket != nil {
+		s.websocket.SetPingHandler(func(string) error { return nil })
+	}
+}
+
 // DisconnectClient forcibly closes the WebSocket connection to simulate network failure.
 // Unlike Close(), this does not send a graceful close message.
 // Returns nil if connection is already closed.

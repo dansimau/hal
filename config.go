@@ -15,6 +15,15 @@ type Config struct {
 	Location          LocationConfig      `yaml:"location"`
 	DatabasePath      string              `yaml:"databasePath"`
 	ReconnectInterval time.Duration       `yaml:"reconnectInterval"`
+
+	// PingInterval is how often to send a websocket ping to Home Assistant to
+	// verify the connection is still alive. Defaults to 30s.
+	PingInterval time.Duration `yaml:"pingInterval"`
+
+	// ReadTimeout is how long to wait for any data (including a pong response
+	// to our ping) before considering the connection dead and forcing a
+	// reconnect. Must be greater than PingInterval. Defaults to 60s.
+	ReadTimeout time.Duration `yaml:"readTimeout"`
 }
 
 type HomeAssistantConfig struct {

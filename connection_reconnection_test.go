@@ -361,3 +361,60 @@ func TestReconnectionAttemptCounter(t *testing.T) {
 	waitForEventSubscription(t, server, 1)
 	assert.Equal(t, 1, conn.GetReconnectAttempts())
 }
+
+// TestStuckConnectionTriggersReconnect verifies that when the websocket is
+// still open but no longer responsive (no data and no pong responses to our
+// pings), the client detects this via the read timeout and reconnects.
+func TestStuckConnectionTriggersReconnect(t *testing.T) {
+	conn, server, cleanup := newClientServerWithConfig(t, Config{
+		DatabasePath:      ":memory:",
+		ReconnectInterval: 100 * time.Millisecond,
+		PingInterval:      100 * time.Millisecond,
+		ReadTimeout:       300 * time.Millisecond,
+	})
+	defer cleanup()
+
+	testEntity := NewEntity("test.entity")
+	conn.RegisterEntities(testEntity)
+
+	// Verify the connection works initially.
+	server.SendEvent(homeassistant.Event{
+		EventData: homeassistant.EventData{
+			EntityID: "test.entity",
+			NewState: &homeassistant.State{
+				EntityID: "test.entity",
+				State:    "on",
+			},
+		},
+	})
+
+	waitFor(t, "initial state update", func() bool {
+		return testEntity.GetState().State == "on"
+	}, func() {
+		t.Logf("Entity state: %v", testEntity.GetState())
+	})
+
+	// Simulate a stuck connection: still open, but no data and no pong replies.
+	server.SimulateStuckConnection()
+
+	// The read timeout should fire and trigger a reconnect.
+	waitForReconnection(t, conn, 1)
+	waitForEventSubscription(t, server, 1)
+
+	// Verify the connection is healthy again.
+	server.SendEvent(homeassistant.Event{
+		EventData: homeassistant.EventData{
+			EntityID: "test.entity",
+			NewState: &homeassistant.State{
+				EntityID: "test.entity",
+				State:    "off",
+			},
+		},
+	})
+
+	waitFor(t, "state update after reconnection", func() bool {
+		return testEntity.GetState().State == "off"
+	}, func() {
+		t.Logf("Entity state: %v", testEntity.GetState())
+	})
+}

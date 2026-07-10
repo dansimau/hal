@@ -15,6 +15,17 @@ import (
 
 const readTimeoutSeconds = 3
 
+const (
+	// defaultPingInterval is how often a websocket ping is sent to Home
+	// Assistant to verify the connection is still alive.
+	defaultPingInterval = 30 * time.Second
+
+	// defaultPongTimeout is how long we wait to receive any data (including a
+	// pong response to our ping) before considering the connection dead and
+	// forcing a reconnect. It must be greater than defaultPingInterval.
+	defaultPongTimeout = 60 * time.Second
+)
+
 // Connection states
 type connectionState int
 
@@ -35,6 +46,11 @@ type Client struct {
 	cfg  ClientConfig
 	conn *websocket.Conn
 
+	// writeMutex serializes writes to the websocket. gorilla/websocket does not
+	// support concurrent writers, and the keepAlive goroutine writes ping
+	// frames concurrently with other senders.
+	writeMutex sync.Mutex
+
 	msgID atomic.Int64
 
 	// Each request has a unique ID and any response will have the same ID. To
@@ -51,9 +67,26 @@ type Client struct {
 type ClientConfig struct {
 	Host  string
 	Token string
+
+	// PingInterval is how often to send a websocket ping to verify the
+	// connection is alive. Defaults to defaultPingInterval.
+	PingInterval time.Duration
+
+	// PongTimeout is how long to wait for any data (including a pong response)
+	// before considering the connection dead and forcing a reconnect. Defaults
+	// to defaultPongTimeout. Must be greater than PingInterval.
+	PongTimeout time.Duration
 }
 
 func NewClient(config ClientConfig) *Client {
+	if config.PingInterval <= 0 {
+		config.PingInterval = defaultPingInterval
+	}
+
+	if config.PongTimeout <= 0 {
+		config.PongTimeout = defaultPongTimeout
+	}
+
 	c := &Client{
 		cfg:       config,
 		responses: make(map[int]chan []byte),
@@ -121,6 +154,10 @@ func (c *Client) authenticate() error {
 
 func (c *Client) Close() error {
 	c.setState(stateDisconnected)
+
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+
 	return c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
 }
 
@@ -151,17 +188,67 @@ func (c *Client) Connect() error {
 
 	c.setState(stateConnected)
 
+	// Set up the initial read deadline and a pong handler that extends it
+	// whenever a pong is received. Any data received in listen() also extends
+	// the deadline. If neither arrives within PongTimeout the read will error
+	// out, triggering a reconnect.
+	_ = conn.SetReadDeadline(time.Now().Add(c.cfg.PongTimeout))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(c.cfg.PongTimeout))
+	})
+
+	// done is closed when listen() exits so the keepAlive goroutine for this
+	// connection stops.
+	done := make(chan struct{})
+
 	// Start listening for messages
-	go c.listen()
+	go c.listen(conn, done)
+
+	// Start sending periodic pings to verify the connection is alive
+	go c.keepAlive(conn, done)
 
 	return nil
 }
 
+// keepAlive periodically sends websocket ping frames to Home Assistant. If a
+// ping cannot be written the connection is considered dead and the goroutine
+// exits; the corresponding read error in listen() will trigger a reconnect.
+func (c *Client) keepAlive(conn *websocket.Conn, done chan struct{}) {
+	ticker := time.NewTicker(c.cfg.PingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			c.writeMutex.Lock()
+			err := conn.WriteControl(
+				websocket.PingMessage,
+				[]byte{},
+				time.Now().Add(readTimeoutSeconds*time.Second),
+			)
+			c.writeMutex.Unlock()
+
+			if err != nil {
+				logger.Error("Failed to send ping, connection may be dead", "", "error", err)
+
+				return
+			}
+
+			logger.Debug("Sent ping", "")
+		}
+	}
+}
+
 // Listen for messages from the websocket and dispatch to listener channels.
-func (c *Client) listen() {
+func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 	logger.Info("Connection established", "")
 
 	defer func() {
+		// Signal the keepAlive goroutine for this connection to stop
+		close(done)
+
 		// Close all pending response channels to unblock waiting callers
 		c.mutex.Lock()
 		for msgID, ch := range c.responses {
@@ -186,7 +273,7 @@ func (c *Client) listen() {
 	}()
 
 	for {
-		_, msgBytes, err := c.conn.ReadMessage()
+		_, msgBytes, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				logger.Info("Received close message", "")
@@ -198,10 +285,15 @@ func (c *Client) listen() {
 				return
 			}
 
-			// Log error and return gracefully instead of panicking
+			// This includes read deadline (idle) timeouts: if no data or pong
+			// has been received within PongTimeout, ReadMessage returns an
+			// error and we return here to trigger a reconnect.
 			logger.Error("Error reading from websocket", "", "error", err)
 			return
 		}
+
+		// Extend the read deadline: we received data, so the connection is alive.
+		_ = conn.SetReadDeadline(time.Now().Add(c.cfg.PongTimeout))
 
 		logger.DebugJSON("Received message", "", string(msgBytes))
 
@@ -261,6 +353,9 @@ func (c *Client) send(msg any) error {
 	}
 
 	logger.DebugJSON("Writing message", "", string(msgBytes))
+
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
 
 	return c.conn.WriteMessage(websocket.TextMessage, msgBytes)
 }
