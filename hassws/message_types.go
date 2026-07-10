@@ -13,6 +13,8 @@ const (
 	MessageTypeCallService     MessageType = "call_service"
 	MessageTypeEvent           MessageType = "event"
 	MessageTypeGetStates       MessageType = "get_states"
+	MessageTypePing            MessageType = "ping"
+	MessageTypePong            MessageType = "pong"
 	MessageTypeResult          MessageType = "result"
 	MessageTypeStateChanged    MessageType = "state_changed"
 	MessageTypeSubscribeEvents MessageType = "subscribe_events"

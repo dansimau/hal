@@ -15,6 +15,18 @@ import (
 
 const readTimeoutSeconds = 3
 
+const (
+	// defaultPingInterval is how often a heartbeat ping is sent to Home
+	// Assistant to keep the connection active and prove it is still alive.
+	defaultPingInterval = 30 * time.Second
+
+	// writeTimeout bounds how long a single websocket write may block. Without
+	// it, a half-open or blackholed connection could wedge a heartbeat write
+	// (or any other write) indefinitely while holding writeMutex, preventing
+	// reconnection and shutdown.
+	writeTimeout = 10 * time.Second
+)
+
 // Connection states
 type connectionState int
 
@@ -35,6 +47,11 @@ type Client struct {
 	cfg  ClientConfig
 	conn *websocket.Conn
 
+	// writeMutex serializes writes to the websocket. Gorilla does not support
+	// concurrent writers, and the heartbeat goroutine writes concurrently with
+	// service calls and subscriptions.
+	writeMutex sync.Mutex
+
 	msgID atomic.Int64
 
 	// Each request has a unique ID and any response will have the same ID. To
@@ -51,9 +68,39 @@ type Client struct {
 type ClientConfig struct {
 	Host  string
 	Token string
+
+	// PingInterval is how often to send a heartbeat ping to Home Assistant.
+	// Defaults to defaultPingInterval if zero.
+	PingInterval time.Duration
+
+	// ReadTimeout is how long to wait for any data before considering the
+	// connection stale and reconnecting. When zero it defaults to twice
+	// PingInterval so pong responses keep the deadline alive. Must be larger
+	// than PingInterval, or a quiet connection would reconnect continuously.
+	ReadTimeout time.Duration
 }
 
 func NewClient(config ClientConfig) *Client {
+	if config.PingInterval == 0 {
+		config.PingInterval = defaultPingInterval
+	}
+
+	// Derive the read timeout from the ping interval so a custom PingInterval
+	// larger than the default read timeout does not cause continuous
+	// reconnects on quiet connections.
+	if config.ReadTimeout == 0 {
+		config.ReadTimeout = 2 * config.PingInterval
+	}
+
+	// Guard against a misconfiguration where the read deadline would expire
+	// before a heartbeat pong could arrive.
+	if config.ReadTimeout <= config.PingInterval {
+		logger.Warn("ReadTimeout must be larger than PingInterval; adjusting", "",
+			"pingInterval", config.PingInterval, "readTimeout", config.ReadTimeout, "adjustedTo", 2*config.PingInterval)
+
+		config.ReadTimeout = 2 * config.PingInterval
+	}
+
 	c := &Client{
 		cfg:       config,
 		responses: make(map[int]chan []byte),
@@ -121,7 +168,8 @@ func (c *Client) authenticate() error {
 
 func (c *Client) Close() error {
 	c.setState(stateDisconnected)
-	return c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
+
+	return c.writeMessage(c.conn, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
 }
 
 func (c *Client) shutdown() error {
@@ -151,17 +199,75 @@ func (c *Client) Connect() error {
 
 	c.setState(stateConnected)
 
-	// Start listening for messages
-	go c.listen()
+	// done is closed when the listen loop for this connection exits. It is used
+	// to stop the heartbeat goroutine so it does not outlive the connection.
+	done := make(chan struct{})
+
+	// Start listening for messages and sending heartbeat pings. Both capture
+	// the current connection so they are unaffected by later reconnections
+	// reassigning c.conn.
+	go c.listen(conn, done)
+	go c.heartbeat(conn, done)
 
 	return nil
 }
 
+// heartbeat periodically sends a ping to Home Assistant to keep the connection
+// active and generate traffic during quiet periods. The pong response resets
+// the read deadline in listen(). If a ping fails to send, the connection is
+// closed so listen() returns and reconnection is triggered.
+func (c *Client) heartbeat(conn *websocket.Conn, done chan struct{}) {
+	ticker := time.NewTicker(c.cfg.PingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			if err := c.ping(conn); err != nil {
+				logger.Error("Heartbeat ping failed, closing connection", "", "error", err)
+
+				// Force the connection closed so the listen loop returns and
+				// the reconnection logic kicks in.
+				_ = conn.Close()
+
+				return
+			}
+		}
+	}
+}
+
+// ping sends a Home Assistant ping message on the given connection.
+func (c *Client) ping(conn *websocket.Conn) error {
+	msg := CommandMessage{
+		ID:   c.nextMsgID(),
+		Type: MessageTypePing,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	logger.DebugJSON("Writing message", "", string(msgBytes))
+
+	return c.writeMessage(conn, websocket.TextMessage, msgBytes)
+}
+
 // Listen for messages from the websocket and dispatch to listener channels.
-func (c *Client) listen() {
+func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 	logger.Info("Connection established", "")
 
 	defer func() {
+		// Signal the heartbeat goroutine for this connection to stop.
+		close(done)
+
+		// Close the underlying socket so a stale/half-open connection is not
+		// leaked server-side while we reconnect. Idempotent if already closed
+		// (e.g. by shutdown() or the heartbeat).
+		_ = conn.Close()
+
 		// Close all pending response channels to unblock waiting callers
 		c.mutex.Lock()
 		for msgID, ch := range c.responses {
@@ -186,7 +292,17 @@ func (c *Client) listen() {
 	}()
 
 	for {
-		_, msgBytes, err := c.conn.ReadMessage()
+		// Reset the read deadline before each read. If no data (including
+		// heartbeat pong responses) arrives within ReadTimeout, ReadMessage
+		// returns an error, the loop exits and reconnection is triggered. This
+		// detects "stuck" connections that remain open but stop delivering data.
+		if err := conn.SetReadDeadline(time.Now().Add(c.cfg.ReadTimeout)); err != nil {
+			logger.Error("Error setting read deadline", "", "error", err)
+
+			return
+		}
+
+		_, msgBytes, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				logger.Info("Received close message", "")
@@ -210,6 +326,13 @@ func (c *Client) listen() {
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
 			logger.Error("Error unmarshalling message", "", "error", err)
 
+			continue
+		}
+
+		// Pong responses to our heartbeat pings have no registered listener;
+		// receiving one has already reset the read deadline above, so just
+		// move on without logging a spurious "no listeners" warning.
+		if msg.Type == MessageTypePong {
 			continue
 		}
 
@@ -253,6 +376,21 @@ func (c *Client) read(target any) error {
 	return json.Unmarshal(msgBytes, target)
 }
 
+// writeMessage serializes writes to the given connection (gorilla forbids
+// concurrent writers) and bounds each write with a deadline. Without the
+// deadline, a half-open or blackholed connection could wedge a write
+// indefinitely while holding writeMutex, blocking reconnection and shutdown.
+func (c *Client) writeMessage(conn *websocket.Conn, messageType int, data []byte) error {
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+
+	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+
+	return conn.WriteMessage(messageType, data)
+}
+
 // Send a message to the websocket.
 func (c *Client) send(msg any) error {
 	msgBytes, err := json.Marshal(msg)
@@ -262,7 +400,7 @@ func (c *Client) send(msg any) error {
 
 	logger.DebugJSON("Writing message", "", string(msgBytes))
 
-	return c.conn.WriteMessage(websocket.TextMessage, msgBytes)
+	return c.writeMessage(c.conn, websocket.TextMessage, msgBytes)
 }
 
 // Add a listener channel for a response to a specific sent message.
