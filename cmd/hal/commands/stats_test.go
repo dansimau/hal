@@ -190,36 +190,108 @@ func TestSumMetrics(t *testing.T) {
 	db := setupTestDBForStats(t)
 
 	now := time.Now()
-	// Insert metrics within and outside the time window
-	metrics := []store.Metric{
-		{
-			Timestamp:  now.Add(-30 * time.Second), // Within 1 minute
+	// Raw points drive the high-resolution "last minute" window.
+	for _, ts := range []time.Time{now.Add(-30 * time.Second), now.Add(-45 * time.Second)} {
+		assert.NilError(t, db.Create(&store.Metric{
+			Timestamp:  ts,
 			MetricType: store.MetricTypeAutomationTriggered,
 			Value:      1,
-		},
-		{
-			Timestamp:  now.Add(-45 * time.Second), // Within 1 minute
-			MetricType: store.MetricTypeAutomationTriggered,
-			Value:      1,
-		},
-		{
-			Timestamp:  now.Add(-2 * time.Minute), // Outside 1 minute window
-			MetricType: store.MetricTypeAutomationTriggered,
-			Value:      1,
-		},
+		}).Error)
 	}
 
-	for _, metric := range metrics {
-		assert.NilError(t, db.Create(&metric).Error)
+	// Rollups cover older minutes within the window: two buckets totalling 3.
+	rollups := []store.MetricRollup{
+		{MetricType: store.MetricTypeAutomationTriggered, BucketStart: now.Add(-2 * time.Minute).Truncate(time.Minute).Unix(), Count: 2, Sum: 2, Histogram: map[int32]int64{0: 2}},
+		{MetricType: store.MetricTypeAutomationTriggered, BucketStart: now.Add(-3 * time.Minute).Truncate(time.Minute).Unix(), Count: 1, Sum: 1, Histogram: map[int32]int64{0: 1}},
+	}
+	for _, r := range rollups {
+		assert.NilError(t, db.Create(&r).Error)
 	}
 
-	// Test sum for last minute (should be 2)
+	// Last minute reads raw: 2 points.
 	result := sumMetrics(db.DB, store.MetricTypeAutomationTriggered, time.Minute)
 	assert.Equal(t, result, int64(2))
 
-	// Test sum for last 5 minutes (should be 3)
+	// Last 5 minutes = rolled buckets (2 + 1 = 3) plus the not-yet-rolled raw tail
+	// (the 2 recent points) = 5.
 	result = sumMetrics(db.DB, store.MetricTypeAutomationTriggered, 5*time.Minute)
+	assert.Equal(t, result, int64(5))
+}
+
+func TestSumMetricsFallsBackToRawWithoutRollups(t *testing.T) {
+	db := setupTestDBForStats(t)
+
+	now := time.Now()
+	// No rollups exist (e.g. before the first backfill). A longer window must
+	// still count the raw points it can see rather than reporting 0.
+	for _, ts := range []time.Time{now.Add(-30 * time.Second), now.Add(-2 * time.Minute), now.Add(-4 * time.Minute)} {
+		assert.NilError(t, db.Create(&store.Metric{
+			Timestamp:  ts,
+			MetricType: store.MetricTypeAutomationTriggered,
+			Value:      1,
+		}).Error)
+	}
+
+	result := sumMetrics(db.DB, store.MetricTypeAutomationTriggered, 5*time.Minute)
 	assert.Equal(t, result, int64(3))
+}
+
+func TestCalculateP99FromRollups(t *testing.T) {
+	db := setupTestDBForStats(t)
+
+	now := time.Now()
+	tenMs := (10 * time.Millisecond).Nanoseconds()
+	ninetyMs := (90 * time.Millisecond).Nanoseconds()
+
+	// Two minutes of samples: 99 fast (10ms) and 100 slow (90ms). Merged, the p99
+	// of the 199 samples (nearest-rank 198th) falls in the 90ms bucket, so the
+	// window p99 is a true quantile of the underlying distribution.
+	rollups := []store.MetricRollup{
+		{MetricType: store.MetricTypeTickProcessingTime, BucketStart: now.Add(-2 * time.Minute).Truncate(time.Minute).Unix(), Count: 99, Sum: tenMs * 99, Histogram: map[int32]int64{store.HistogramBucket(tenMs): 99}},
+		{MetricType: store.MetricTypeTickProcessingTime, BucketStart: now.Add(-3 * time.Minute).Truncate(time.Minute).Unix(), Count: 100, Sum: ninetyMs * 100, Histogram: map[int32]int64{store.HistogramBucket(ninetyMs): 100}},
+	}
+	for _, r := range rollups {
+		assert.NilError(t, db.Create(&r).Error)
+	}
+
+	expected := formatDuration(time.Duration(store.HistogramValue(store.HistogramBucket(ninetyMs))))
+	result := calculateP99(db.DB, store.MetricTypeTickProcessingTime, 5*time.Minute)
+	assert.Equal(t, result, expected)
+
+	// No rollups for this metric type -> "0ms".
+	none := calculateP99(db.DB, store.MetricTypeAutomationTriggered, 5*time.Minute)
+	assert.Equal(t, none, "0ms")
+}
+
+func TestCalculateP99IncludesRawTail(t *testing.T) {
+	db := setupTestDBForStats(t)
+
+	now := time.Now()
+	fastMs := (5 * time.Millisecond).Nanoseconds()
+	slowMs := (80 * time.Millisecond).Nanoseconds()
+
+	// An older rolled-up minute of fast samples...
+	assert.NilError(t, db.Create(&store.MetricRollup{
+		MetricType:  store.MetricTypeTickProcessingTime,
+		BucketStart: now.Add(-3 * time.Minute).Truncate(time.Minute).Unix(),
+		Count:       100, Sum: fastMs * 100,
+		Histogram: map[int32]int64{store.HistogramBucket(fastMs): 100},
+	}).Error)
+
+	// ...plus recent raw samples not yet rolled up. A slow one in the raw tail must
+	// still influence the window p99.
+	for range 3 {
+		assert.NilError(t, db.Create(&store.Metric{
+			Timestamp:  now.Add(-10 * time.Second),
+			MetricType: store.MetricTypeTickProcessingTime,
+			Value:      slowMs,
+		}).Error)
+	}
+
+	// 100 fast + 3 slow = 103 samples; nearest-rank p99 (102nd) is a slow sample.
+	expected := formatDuration(time.Duration(store.HistogramValue(store.HistogramBucket(slowMs))))
+	result := calculateP99(db.DB, store.MetricTypeTickProcessingTime, 5*time.Minute)
+	assert.Equal(t, result, expected)
 }
 
 func TestCalculateP99(t *testing.T) {

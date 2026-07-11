@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -28,8 +29,6 @@ func TestNewService(t *testing.T) {
 	service := NewService(db)
 
 	assert.Assert(t, service != nil)
-	assert.Equal(t, service.pruneInterval, 24*time.Hour)
-	assert.Equal(t, service.retentionTime, 90*24*time.Hour) // 3 months
 }
 
 func TestRecordCounter(t *testing.T) {
@@ -99,48 +98,178 @@ func TestMultipleMetrics(t *testing.T) {
 	assert.Equal(t, count, int64(3))
 }
 
-func TestPruneOldMetrics(t *testing.T) {
+func TestPruneOldData(t *testing.T) {
+	db := setupTestDB(t)
+
+	now := time.Now()
+
+	// Raw metrics: one older than rawRetention (24h), one within it.
+	assert.NilError(t, db.Create(&store.Metric{
+		Timestamp:  now.Add(-48 * time.Hour),
+		MetricType: store.MetricTypeAutomationTriggered,
+		Value:      1,
+	}).Error)
+	assert.NilError(t, db.Create(&store.Metric{
+		Timestamp:  now.Add(-1 * time.Hour),
+		MetricType: store.MetricTypeAutomationTriggered,
+		Value:      1,
+	}).Error)
+
+	// Rollups: one older than rollupRetention (90d), one within it.
+	assert.NilError(t, db.Create(&store.MetricRollup{
+		MetricType:  store.MetricTypeAutomationTriggered,
+		BucketStart: now.Add(-100 * 24 * time.Hour).Truncate(time.Minute).Unix(),
+		Count:       1, Sum: 1, Histogram: map[int32]int64{0: 1},
+	}).Error)
+	assert.NilError(t, db.Create(&store.MetricRollup{
+		MetricType:  store.MetricTypeAutomationTriggered,
+		BucketStart: now.Add(-1 * time.Hour).Truncate(time.Minute).Unix(),
+		Count:       1, Sum: 1, Histogram: map[int32]int64{0: 1},
+	}).Error)
+
+	assert.NilError(t, pruneOldData(db.DB, now))
+
+	var rawCount, rollupCount int64
+	db.Model(&store.Metric{}).Count(&rawCount)
+	db.Model(&store.MetricRollup{}).Count(&rollupCount)
+
+	// Only the recent raw point and recent rollup should remain. The watermark
+	// (latest rollup, 1h ago) is past the 24h raw cut-off, so raw is pruned.
+	assert.Equal(t, rawCount, int64(1))
+	assert.Equal(t, rollupCount, int64(1))
+}
+
+func TestPruneOldDataDefersRawUntilRolledUp(t *testing.T) {
+	db := setupTestDB(t)
+
+	now := time.Now()
+	assert.NilError(t, db.Create(&store.Metric{
+		Timestamp:  now.Add(-48 * time.Hour),
+		MetricType: store.MetricTypeAutomationTriggered,
+		Value:      1,
+	}).Error)
+
+	// No rollups exist yet, so the watermark has not reached the raw cut-off: old
+	// raw must be retained rather than lost.
+	assert.NilError(t, pruneOldData(db.DB, now))
+
+	var rawCount int64
+	db.Model(&store.Metric{}).Count(&rawCount)
+	assert.Equal(t, rawCount, int64(1))
+
+	// A stale rollup whose watermark is still behind the cut-off must also defer
+	// raw pruning.
+	assert.NilError(t, db.Create(&store.MetricRollup{
+		MetricType:  store.MetricTypeAutomationTriggered,
+		BucketStart: now.Add(-72 * time.Hour).Truncate(time.Minute).Unix(),
+		Count:       1, Sum: 1, Histogram: map[int32]int64{0: 1},
+	}).Error)
+
+	assert.NilError(t, pruneOldData(db.DB, now))
+	db.Model(&store.Metric{}).Count(&rawCount)
+	assert.Equal(t, rawCount, int64(1))
+}
+
+func TestAggregate(t *testing.T) {
+	base := time.Date(2026, 7, 11, 12, 30, 0, 0, time.UTC)
+
+	var raw []store.Metric
+	// 100 samples in one minute with values 1..100 (ns). True p99 (nearest-rank,
+	// ceil(100*0.99)=99, index 98) is 99.
+	for i := int64(1); i <= 100; i++ {
+		raw = append(raw, store.Metric{
+			Timestamp:  base.Add(time.Duration(i) * time.Millisecond),
+			MetricType: store.MetricTypeTickProcessingTime,
+			Value:      i,
+		})
+	}
+
+	rollups := aggregate(raw)
+	assert.Equal(t, len(rollups), 1)
+
+	r := rollups[0]
+	assert.Equal(t, r.BucketStart, base.Unix())
+	assert.Equal(t, r.Count, int64(100))
+	assert.Equal(t, r.Sum, int64(5050))
+
+	// The histogram-derived p99 should be within the bucketing's relative accuracy
+	// of the true value (99).
+	p99 := store.HistogramQuantile(r.Histogram, 0.99)
+	assert.Assert(t, math.Abs(float64(p99)-99)/99 <= 0.05, "p99 = %d, want ~99", p99)
+}
+
+func TestRollupPendingBackfillsHistory(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)
 
-	// Create old and new metrics (100 days old vs 1 hour old)
-	oldTime := time.Now().Add(-100 * 24 * time.Hour) // 100 days old (older than 90 day retention)
-	newTime := time.Now().Add(-1 * time.Hour)        // 1 hour old
+	base := time.Date(2026, 7, 11, 12, 30, 0, 0, time.UTC)
 
-	oldMetric := store.Metric{
-		Timestamp:  oldTime,
-		MetricType: store.MetricTypeAutomationTriggered,
-		Value:      1,
+	// Two samples in minute 12:30, one in 12:31.
+	for _, ts := range []time.Time{base, base.Add(30 * time.Second), base.Add(90 * time.Second)} {
+		assert.NilError(t, db.Create(&store.Metric{
+			Timestamp:  ts,
+			MetricType: store.MetricTypeAutomationTriggered,
+			Value:      1,
+		}).Error)
 	}
 
-	newMetric := store.Metric{
-		Timestamp:  newTime,
-		MetricType: store.MetricTypeAutomationTriggered,
-		Value:      1,
-	}
+	// Roll up as if "now" is well after the samples so both minutes are complete.
+	assert.NilError(t, service.rollupPending(base.Add(10*time.Minute)))
 
-	// Insert metrics directly into database
-	assert.NilError(t, db.Create(&oldMetric).Error)
-	assert.NilError(t, db.Create(&newMetric).Error)
+	var rollups []store.MetricRollup
+	assert.NilError(t, db.Order("bucket_start ASC").Find(&rollups).Error)
+	assert.Equal(t, len(rollups), 2)
+	assert.Equal(t, rollups[0].BucketStart, base.Unix())
+	assert.Equal(t, rollups[0].Count, int64(2))
+	assert.Equal(t, rollups[1].BucketStart, base.Add(time.Minute).Unix())
+	assert.Equal(t, rollups[1].Count, int64(1))
 
-	// Verify both metrics exist
+	// Re-running is idempotent: contiguous re-rollup yields the same rollups.
+	assert.NilError(t, service.rollupPending(base.Add(10*time.Minute)))
 	var count int64
-	db.Model(&store.Metric{}).Count(&count)
+	db.Model(&store.MetricRollup{}).Count(&count)
 	assert.Equal(t, count, int64(2))
 
-	// Manually trigger pruning with the default retention time (90 days)
-	cutoffTime := time.Now().Add(-service.retentionTime)
-	result := db.Where("timestamp < ?", cutoffTime).Delete(&store.Metric{})
-	assert.NilError(t, result.Error)
+	// Histograms must survive the round-trip through the JSON serializer.
+	var r store.MetricRollup
+	assert.NilError(t, db.Where("bucket_start = ?", base.Unix()).First(&r).Error)
+	var histTotal int64
+	for _, c := range r.Histogram {
+		histTotal += c
+	}
+	assert.Equal(t, histTotal, int64(2))
+}
 
-	// Only new metric should remain
-	db.Model(&store.Metric{}).Count(&count)
-	assert.Equal(t, count, int64(1))
+func TestRollupPendingResumesFromWatermarkWithoutGaps(t *testing.T) {
+	db := setupTestDB(t)
+	service := NewService(db)
 
-	// Verify it's the new metric
-	var remaining store.Metric
-	db.First(&remaining)
-	assert.Assert(t, remaining.Timestamp.After(cutoffTime))
+	// Use local-tz times (as production does via time.Now()) so the stored
+	// timestamps and the watermark-derived resume bound compare consistently.
+	base := time.Now().Truncate(time.Minute).Add(-10 * time.Minute)
+
+	// First pass rolls up the first minute.
+	assert.NilError(t, db.Create(&store.Metric{
+		Timestamp:  base.Add(10 * time.Second),
+		MetricType: store.MetricTypeTickProcessingTime,
+		Value:      1000,
+	}).Error)
+	assert.NilError(t, service.rollupPending(base.Add(time.Minute)))
+
+	// Later, data appears two minutes on (the minute in between is a gap with no
+	// data). The next pass must still roll up that later minute by resuming from
+	// the watermark rather than a fixed short lookback, so a long backfill can
+	// never leave permanent holes.
+	assert.NilError(t, db.Create(&store.Metric{
+		Timestamp:  base.Add(2*time.Minute + 10*time.Second),
+		MetricType: store.MetricTypeTickProcessingTime,
+		Value:      2000,
+	}).Error)
+	assert.NilError(t, service.rollupPending(base.Add(3*time.Minute)))
+
+	var buckets []int64
+	assert.NilError(t, db.Model(&store.MetricRollup{}).Order("bucket_start ASC").Pluck("bucket_start", &buckets).Error)
+	assert.DeepEqual(t, buckets, []int64{base.Unix(), base.Add(2 * time.Minute).Unix()})
 }
 
 func TestServiceStartStop(t *testing.T) {
