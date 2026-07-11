@@ -21,10 +21,9 @@ const (
 	rollupRetention = 90 * 24 * time.Hour
 	// pruneInterval is how often old raw points and rollups are deleted.
 	pruneInterval = time.Hour
-	// rollupLookback is how far back each incremental rollup pass reprocesses
-	// completed minutes. Reprocessing is idempotent (upsert) and guards against
-	// gaps if a pass is delayed or samples arrive slightly late.
-	rollupLookback = 5 * time.Minute
+	// backfillChunk is the raw-data window processed per iteration when catching
+	// up. Chunking bounds memory when rolling up a large historical backlog.
+	backfillChunk = 24 * time.Hour
 )
 
 // Service handles metrics collection, rollup and pruning.
@@ -33,17 +32,13 @@ const (
 type Service struct {
 	db       *store.Store
 	stopChan chan struct{}
-	// backfillDone is closed once the historical raw data has been rolled up. Raw
-	// pruning is held off until then so that un-rolled history is never deleted.
-	backfillDone chan struct{}
 }
 
 // NewService creates a new metrics service
 func NewService(db *store.Store) *Service {
 	return &Service{
-		db:           db,
-		stopChan:     make(chan struct{}),
-		backfillDone: make(chan struct{}),
+		db:       db,
+		stopChan: make(chan struct{}),
 	}
 }
 
@@ -90,30 +85,23 @@ func (s *Service) RecordTimer(metricType store.MetricType, duration time.Duratio
 	})
 }
 
-// rollupLoop performs a one-time backfill of any historical raw data, then
-// incrementally rolls up completed minutes.
+// rollupLoop rolls up completed minutes from raw data. The first pass catches up
+// all historical raw (the initial backfill); subsequent passes roll up each newly
+// completed minute. A single mechanism handles backfill, gap-filling after
+// downtime, and steady state (see rollupPending).
 func (s *Service) rollupLoop() {
-	// Roll up all historical raw data so long-range queries have data immediately
-	// (rather than waiting for it to accumulate minute by minute). Runs once at
-	// startup. Only on success do we allow raw pruning to proceed, so that raw
-	// history is never deleted before it has been captured in rollups.
-	if err := backfillRollups(s.db.DB, time.Now()); err != nil {
-		logger.Error("Failed to backfill metric rollups", "", "error", err)
-	} else {
-		close(s.backfillDone)
-	}
-
 	ticker := time.NewTicker(rollupInterval)
 	defer ticker.Stop()
 
 	for {
+		if err := s.rollupPending(time.Now()); err != nil {
+			logger.Error("Failed to roll up metrics", "", "error", err)
+		}
+
 		select {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
-			s.db.EnqueueWrite(func(db *gorm.DB) error {
-				return rollupRecent(db, time.Now())
-			})
 		}
 	}
 }
@@ -128,53 +116,38 @@ func (s *Service) pruneLoop() {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
-			now := time.Now()
-
-			// Only prune raw once the historical backfill has completed.
-			pruneRaw := false
-			select {
-			case <-s.backfillDone:
-				pruneRaw = true
-			default:
+			if err := pruneOldData(s.db.DB, time.Now()); err != nil {
+				logger.Error("Failed to prune metrics", "", "error", err)
 			}
-
-			s.db.EnqueueWrite(func(db *gorm.DB) error {
-				return pruneOldData(db, now, pruneRaw)
-			})
 		}
 	}
 }
 
-// backfillHistogram is the raw-data chunk size processed per iteration during
-// backfill. Chunking bounds memory when rolling up a large historical backlog.
-const backfillChunk = 24 * time.Hour
-
-// backfillRollups rolls up all historical raw metrics (older than the current
-// minute) into per-minute rollups. Histograms cannot be built in SQL, so raw
-// data is read in day-sized chunks and aggregated in Go. Existing rollups are
-// left untouched (ON CONFLICT DO NOTHING), so freshly computed incremental
-// rollups always take precedence over the backfill.
-func backfillRollups(db *gorm.DB, now time.Time) error {
+// rollupPending rolls up every completed minute that has not been rolled up yet:
+// from just after the latest existing rollup (or the earliest raw point if none
+// exist) up to the current minute, in day-sized chunks. This one mechanism does
+// the initial historical backfill, closes gaps left by downtime or a slow
+// backfill, and performs steady-state per-minute rollups. Because the resume
+// point is derived from the rollups themselves, a failed pass changes nothing and
+// is simply retried on the next tick.
+func (s *Service) rollupPending(now time.Time) error {
 	upper := now.Truncate(time.Minute) // exclude the in-progress minute
 
-	// Find the earliest raw point via the ORM so its timestamp deserialises
-	// correctly (a raw MIN() aggregate comes back as a string).
-	var earliest store.Metric
-	if err := db.Select("timestamp").Order("timestamp ASC").First(&earliest).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil // no raw data to back-fill
-		}
-
+	lower, ok, err := rollupResumePoint(s.db.DB)
+	if err != nil {
 		return err
 	}
+	if !ok {
+		return nil // no raw data to roll up
+	}
 
-	for chunkStart := earliest.Timestamp.Truncate(time.Minute); chunkStart.Before(upper); chunkStart = chunkStart.Add(backfillChunk) {
+	for chunkStart := lower; chunkStart.Before(upper); chunkStart = chunkStart.Add(backfillChunk) {
 		chunkEnd := chunkStart.Add(backfillChunk)
 		if chunkEnd.After(upper) {
 			chunkEnd = upper
 		}
 
-		if err := rollupWindow(db, chunkStart, chunkEnd, true); err != nil {
+		if err := rollupWindow(s.db.DB, chunkStart, chunkEnd); err != nil {
 			return err
 		}
 	}
@@ -182,19 +155,55 @@ func backfillRollups(db *gorm.DB, now time.Time) error {
 	return nil
 }
 
-// rollupRecent recomputes rollups for recently completed minutes from raw data.
-// It is idempotent: existing rollups for the same bucket are overwritten with
-// the freshly computed values.
-func rollupRecent(db *gorm.DB, now time.Time) error {
-	upper := now.Truncate(time.Minute) // exclude the in-progress minute
-	return rollupWindow(db, upper.Add(-rollupLookback), upper, false)
+// rollupResumePoint returns the minute from which rolling up should resume: just
+// after the latest existing rollup, or the earliest raw point if none exist. The
+// bool is false when there is no raw data at all.
+func rollupResumePoint(db *gorm.DB) (time.Time, bool, error) {
+	watermark, ok, err := latestRolledMinute(db)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if ok {
+		// Resume at the minute after the latest rolled-up one.
+		return time.Unix(watermark, 0).Add(time.Minute), true, nil
+	}
+
+	// No rollups yet: start from the earliest raw point. Fetch it via the ORM so
+	// the timestamp deserialises correctly (a raw MIN() aggregate comes back as a
+	// string).
+	var earliest store.Metric
+	if err := db.Select("timestamp").Order("timestamp ASC").First(&earliest).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return time.Time{}, false, nil
+		}
+
+		return time.Time{}, false, err
+	}
+
+	return earliest.Timestamp.Truncate(time.Minute), true, nil
+}
+
+// latestRolledMinute returns the BucketStart (Unix seconds) of the most recent
+// rollup, or ok=false when there are no rollups.
+func latestRolledMinute(db *gorm.DB) (int64, bool, error) {
+	var result struct {
+		Max *int64
+	}
+	if err := db.Model(&store.MetricRollup{}).Select("MAX(bucket_start) as max").Scan(&result).Error; err != nil {
+		return 0, false, err
+	}
+	if result.Max == nil {
+		return 0, false, nil
+	}
+
+	return *result.Max, true, nil
 }
 
 // rollupWindow aggregates raw metrics in [lower, upper) into per-minute rollups
-// and upserts them. When keepExisting is true, existing rollups are preserved
-// (used by backfill); otherwise they are overwritten (used by incremental
-// rollups, which are authoritative for recent minutes).
-func rollupWindow(db *gorm.DB, lower, upper time.Time, keepExisting bool) error {
+// and upserts them, overwriting any existing rollup for the same bucket. Since
+// rollups are recomputed contiguously from the watermark, overwriting is
+// idempotent.
+func rollupWindow(db *gorm.DB, lower, upper time.Time) error {
 	var raw []store.Metric
 	if err := db.
 		Select("metric_type", "timestamp", "value").
@@ -208,18 +217,10 @@ func rollupWindow(db *gorm.DB, lower, upper time.Time, keepExisting bool) error 
 		return nil
 	}
 
-	onConflict := clause.OnConflict{
+	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "metric_type"}, {Name: "bucket_start"}},
 		DoUpdates: clause.AssignmentColumns([]string{"count", "sum", "histogram"}),
-	}
-	if keepExisting {
-		onConflict = clause.OnConflict{
-			Columns:   []clause.Column{{Name: "metric_type"}, {Name: "bucket_start"}},
-			DoNothing: true,
-		}
-	}
-
-	return db.Clauses(onConflict).Create(&rollups).Error
+	}).Create(&rollups).Error
 }
 
 // aggregate groups raw metrics into per-minute rollups, building a count, sum and
@@ -266,19 +267,29 @@ func aggregate(raw []store.Metric) []store.MetricRollup {
 	return rollups
 }
 
-// pruneOldData deletes rollups older than rollupRetention and, when pruneRaw is
-// true, raw points older than rawRetention. Raw pruning is gated on the caller
-// having confirmed the historical backfill completed, so that raw history is
-// never deleted before it has been captured in rollups.
-func pruneOldData(db *gorm.DB, now time.Time, pruneRaw bool) error {
-	if pruneRaw {
-		rawCutoff := now.Add(-rawRetention)
+// pruneOldData deletes rollups older than rollupRetention and raw points older
+// than rawRetention. Raw is only pruned once it has been captured in rollups: the
+// rollup watermark must have advanced past the raw cut-off. This means an
+// incomplete or failed catch-up simply defers raw pruning (no data is lost), and
+// pruning resumes automatically once the rollups catch up.
+func pruneOldData(db *gorm.DB, now time.Time) error {
+	rawCutoff := now.Add(-rawRetention)
+
+	watermark, ok, err := latestRolledMinute(db)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case ok && watermark >= rawCutoff.Unix():
 		if result := db.Where("timestamp < ?", rawCutoff).Delete(&store.Metric{}); result.Error != nil {
 			logger.Error("Failed to prune old raw metrics", "", "error", result.Error)
 			return result.Error
 		} else if result.RowsAffected > 0 {
 			logger.Info("Pruned old raw metrics", "", "count", result.RowsAffected, "cutoff", rawCutoff)
 		}
+	default:
+		logger.Info("Deferring raw metric prune until rollups catch up", "", "cutoff", rawCutoff)
 	}
 
 	rollupCutoff := now.Add(-rollupRetention).Unix()

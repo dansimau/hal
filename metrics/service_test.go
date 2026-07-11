@@ -127,18 +127,19 @@ func TestPruneOldData(t *testing.T) {
 		Count:       1, Sum: 1, Histogram: map[int32]int64{0: 1},
 	}).Error)
 
-	assert.NilError(t, pruneOldData(db.DB, now, true))
+	assert.NilError(t, pruneOldData(db.DB, now))
 
 	var rawCount, rollupCount int64
 	db.Model(&store.Metric{}).Count(&rawCount)
 	db.Model(&store.MetricRollup{}).Count(&rollupCount)
 
-	// Only the recent raw point and recent rollup should remain.
+	// Only the recent raw point and recent rollup should remain. The watermark
+	// (latest rollup, 1h ago) is past the 24h raw cut-off, so raw is pruned.
 	assert.Equal(t, rawCount, int64(1))
 	assert.Equal(t, rollupCount, int64(1))
 }
 
-func TestPruneOldDataSkipsRawUntilBackfilled(t *testing.T) {
+func TestPruneOldDataDefersRawUntilRolledUp(t *testing.T) {
 	db := setupTestDB(t)
 
 	now := time.Now()
@@ -148,10 +149,23 @@ func TestPruneOldDataSkipsRawUntilBackfilled(t *testing.T) {
 		Value:      1,
 	}).Error)
 
-	// With pruneRaw=false, old raw points must be retained.
-	assert.NilError(t, pruneOldData(db.DB, now, false))
+	// No rollups exist yet, so the watermark has not reached the raw cut-off: old
+	// raw must be retained rather than lost.
+	assert.NilError(t, pruneOldData(db.DB, now))
 
 	var rawCount int64
+	db.Model(&store.Metric{}).Count(&rawCount)
+	assert.Equal(t, rawCount, int64(1))
+
+	// A stale rollup whose watermark is still behind the cut-off must also defer
+	// raw pruning.
+	assert.NilError(t, db.Create(&store.MetricRollup{
+		MetricType:  store.MetricTypeAutomationTriggered,
+		BucketStart: now.Add(-72 * time.Hour).Truncate(time.Minute).Unix(),
+		Count:       1, Sum: 1, Histogram: map[int32]int64{0: 1},
+	}).Error)
+
+	assert.NilError(t, pruneOldData(db.DB, now))
 	db.Model(&store.Metric{}).Count(&rawCount)
 	assert.Equal(t, rawCount, int64(1))
 }
@@ -184,8 +198,9 @@ func TestAggregate(t *testing.T) {
 	assert.Assert(t, math.Abs(float64(p99)-99)/99 <= 0.05, "p99 = %d, want ~99", p99)
 }
 
-func TestBackfillRollups(t *testing.T) {
+func TestRollupPendingBackfillsHistory(t *testing.T) {
 	db := setupTestDB(t)
+	service := NewService(db)
 
 	base := time.Date(2026, 7, 11, 12, 30, 0, 0, time.UTC)
 
@@ -198,8 +213,8 @@ func TestBackfillRollups(t *testing.T) {
 		}).Error)
 	}
 
-	// Backfill as if "now" is well after the samples so both minutes are complete.
-	assert.NilError(t, backfillRollups(db.DB, base.Add(10*time.Minute)))
+	// Roll up as if "now" is well after the samples so both minutes are complete.
+	assert.NilError(t, service.rollupPending(base.Add(10*time.Minute)))
 
 	var rollups []store.MetricRollup
 	assert.NilError(t, db.Order("bucket_start ASC").Find(&rollups).Error)
@@ -209,40 +224,52 @@ func TestBackfillRollups(t *testing.T) {
 	assert.Equal(t, rollups[1].BucketStart, base.Add(time.Minute).Unix())
 	assert.Equal(t, rollups[1].Count, int64(1))
 
-	// Backfill must not overwrite existing rollups (ON CONFLICT DO NOTHING).
-	assert.NilError(t, backfillRollups(db.DB, base.Add(10*time.Minute)))
+	// Re-running is idempotent: contiguous re-rollup yields the same rollups.
+	assert.NilError(t, service.rollupPending(base.Add(10*time.Minute)))
 	var count int64
 	db.Model(&store.MetricRollup{}).Count(&count)
 	assert.Equal(t, count, int64(2))
-}
 
-func TestRollupRecent(t *testing.T) {
-	db := setupTestDB(t)
-
-	now := time.Now().Truncate(time.Minute)
-	// Put samples in the previous, now-completed minute.
-	bucket := now.Add(-time.Minute)
-	for i := int64(1); i <= 10; i++ {
-		assert.NilError(t, db.Create(&store.Metric{
-			Timestamp:  bucket.Add(time.Duration(i) * time.Second),
-			MetricType: store.MetricTypeTickProcessingTime,
-			Value:      i * 1000,
-		}).Error)
-	}
-
-	assert.NilError(t, rollupRecent(db.DB, now))
-
+	// Histograms must survive the round-trip through the JSON serializer.
 	var r store.MetricRollup
-	assert.NilError(t, db.Where("bucket_start = ?", bucket.Unix()).First(&r).Error)
-	assert.Equal(t, r.Count, int64(10))
-	assert.Equal(t, r.Sum, int64(55000))
-
-	// Histogram must survive the round-trip through the JSON serializer.
+	assert.NilError(t, db.Where("bucket_start = ?", base.Unix()).First(&r).Error)
 	var histTotal int64
 	for _, c := range r.Histogram {
 		histTotal += c
 	}
-	assert.Equal(t, histTotal, int64(10))
+	assert.Equal(t, histTotal, int64(2))
+}
+
+func TestRollupPendingResumesFromWatermarkWithoutGaps(t *testing.T) {
+	db := setupTestDB(t)
+	service := NewService(db)
+
+	// Use local-tz times (as production does via time.Now()) so the stored
+	// timestamps and the watermark-derived resume bound compare consistently.
+	base := time.Now().Truncate(time.Minute).Add(-10 * time.Minute)
+
+	// First pass rolls up the first minute.
+	assert.NilError(t, db.Create(&store.Metric{
+		Timestamp:  base.Add(10 * time.Second),
+		MetricType: store.MetricTypeTickProcessingTime,
+		Value:      1000,
+	}).Error)
+	assert.NilError(t, service.rollupPending(base.Add(time.Minute)))
+
+	// Later, data appears two minutes on (the minute in between is a gap with no
+	// data). The next pass must still roll up that later minute by resuming from
+	// the watermark rather than a fixed short lookback, so a long backfill can
+	// never leave permanent holes.
+	assert.NilError(t, db.Create(&store.Metric{
+		Timestamp:  base.Add(2*time.Minute + 10*time.Second),
+		MetricType: store.MetricTypeTickProcessingTime,
+		Value:      2000,
+	}).Error)
+	assert.NilError(t, service.rollupPending(base.Add(3*time.Minute)))
+
+	var buckets []int64
+	assert.NilError(t, db.Model(&store.MetricRollup{}).Order("bucket_start ASC").Pluck("bucket_start", &buckets).Error)
+	assert.DeepEqual(t, buckets, []int64{base.Unix(), base.Add(2 * time.Minute).Unix()})
 }
 
 func TestServiceStartStop(t *testing.T) {

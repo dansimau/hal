@@ -88,36 +88,70 @@ func runStatsCommand(dbPath string) error {
 }
 
 // sumMetrics returns the total count of a counter metric over the given window.
-// The "last minute" window is served from raw points (exact, high resolution);
-// longer windows are served from pre-aggregated per-minute rollups, which keeps
-// the query fast regardless of how much history exists.
+// The "last minute" window is served entirely from raw points (exact, high
+// resolution). Longer windows are served from pre-aggregated rollups plus the raw
+// "tail" that has not been rolled up yet (the current minute and anything the
+// rollup loop has not caught up on), so the result stays correct and current even
+// when rollups are missing or lagging.
 func sumMetrics(db *gorm.DB, metricType store.MetricType, duration time.Duration) int64 {
+	since := time.Now().Add(-duration)
+
+	if duration <= time.Minute {
+		return rawSum(db, metricType, since)
+	}
+
+	var rollup struct {
+		Total int64
+	}
+	db.Model(&store.MetricRollup{}).
+		Select("COALESCE(SUM(count), 0) as total").
+		Where("metric_type = ? AND bucket_start > ?", metricType, since.Unix()).
+		Scan(&rollup)
+
+	return rollup.Total + rawSum(db, metricType, rawTailStart(db, metricType, since))
+}
+
+// rawSum returns the sum of raw metric values at or after the given time.
+func rawSum(db *gorm.DB, metricType store.MetricType, since time.Time) int64 {
 	var result struct {
 		Total int64
 	}
-
-	if duration <= time.Minute {
-		since := time.Now().Add(-duration)
-		db.Model(&store.Metric{}).
-			Select("COALESCE(SUM(value), 0) as total").
-			Where("metric_type = ? AND timestamp > ?", metricType, since).
-			Scan(&result)
-	} else {
-		since := time.Now().Add(-duration).Unix()
-		db.Model(&store.MetricRollup{}).
-			Select("COALESCE(SUM(count), 0) as total").
-			Where("metric_type = ? AND bucket_start > ?", metricType, since).
-			Scan(&result)
-	}
+	db.Model(&store.Metric{}).
+		Select("COALESCE(SUM(value), 0) as total").
+		Where("metric_type = ? AND timestamp >= ?", metricType, since).
+		Scan(&result)
 
 	return result.Total
 }
 
+// rawTailStart returns the time from which raw points should supplement rollups
+// for a window beginning at `since`: the end of the latest rolled-up minute
+// within the window, or `since` itself when no rollups cover the window (so the
+// window falls back to raw entirely, e.g. before the first backfill has run).
+// Because rolled minutes are contiguous up to the watermark, the raw tail never
+// overlaps a rollup, so the two never double-count.
+func rawTailStart(db *gorm.DB, metricType store.MetricType, since time.Time) time.Time {
+	var result struct {
+		Max *int64
+	}
+	db.Model(&store.MetricRollup{}).
+		Select("MAX(bucket_start) as max").
+		Where("metric_type = ? AND bucket_start > ?", metricType, since.Unix()).
+		Scan(&result)
+
+	if result.Max == nil {
+		return since
+	}
+
+	return time.Unix(*result.Max, 0).Add(time.Minute)
+}
+
 // calculateP99 returns the p99 of a timer metric over the given window. The
 // "last minute" window computes an exact p99 from raw points; longer windows
-// merge the per-minute rollup histograms and compute the p99 of the merged
-// distribution. Because the histograms share fixed bucket boundaries, the merge
-// is exact and the result is a true p99 accurate to a bounded relative error.
+// merge the per-minute rollup histograms with the not-yet-rolled raw tail and
+// compute the p99 of the merged distribution. Because the histograms share fixed
+// bucket boundaries, the merge is exact and the result is a true p99 accurate to
+// a bounded relative error.
 func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Duration) string {
 	if duration <= time.Minute {
 		since := time.Now().Add(-duration)
@@ -144,17 +178,27 @@ func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Durati
 		return formatDuration(time.Duration(values[index]))
 	}
 
-	since := time.Now().Add(-duration).Unix()
+	since := time.Now().Add(-duration)
 	var rollups []store.MetricRollup
 
 	db.Model(&store.MetricRollup{}).
 		Select("histogram").
-		Where("metric_type = ? AND bucket_start > ?", metricType, since).
+		Where("metric_type = ? AND bucket_start > ?", metricType, since.Unix()).
 		Find(&rollups)
 
 	merged := make(map[int32]int64)
 	for _, r := range rollups {
 		merged = store.MergeHistograms(merged, r.Histogram)
+	}
+
+	// Supplement with raw points not yet captured in a rollup.
+	var rawValues []int64
+	db.Model(&store.Metric{}).
+		Select("value").
+		Where("metric_type = ? AND timestamp >= ?", metricType, rawTailStart(db, metricType, since)).
+		Scan(&rawValues)
+	for _, v := range rawValues {
+		merged[store.HistogramBucket(v)]++
 	}
 
 	p99 := store.HistogramQuantile(merged, 0.99)

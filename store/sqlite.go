@@ -12,8 +12,10 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	// Add auto_vacuum pragma to DSN - must be set before database is created
-	dsn := path + "?_pragma=auto_vacuum(FULL)"
+	// auto_vacuum must be set before the database is created. busy_timeout lets
+	// concurrent writers (the async writer, the rollup loop, and separate CLI
+	// processes) wait for the lock instead of failing with SQLITE_BUSY.
+	dsn := path + "?_pragma=auto_vacuum(FULL)&_pragma=busy_timeout(5000)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, err
