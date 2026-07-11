@@ -87,43 +87,82 @@ func runStatsCommand(dbPath string) error {
 	return printTable(summaries)
 }
 
+// sumMetrics returns the total count of a counter metric over the given window.
+// The "last minute" window is served from raw points (exact, high resolution);
+// longer windows are served from pre-aggregated per-minute rollups, which keeps
+// the query fast regardless of how much history exists.
 func sumMetrics(db *gorm.DB, metricType store.MetricType, duration time.Duration) int64 {
-	since := time.Now().Add(-duration)
 	var result struct {
 		Total int64
 	}
 
-	db.Model(&store.Metric{}).
-		Select("COALESCE(SUM(value), 0) as total").
-		Where("metric_type = ? AND timestamp > ?", metricType, since).
-		Scan(&result)
+	if duration <= time.Minute {
+		since := time.Now().Add(-duration)
+		db.Model(&store.Metric{}).
+			Select("COALESCE(SUM(value), 0) as total").
+			Where("metric_type = ? AND timestamp > ?", metricType, since).
+			Scan(&result)
+	} else {
+		since := time.Now().Add(-duration).Unix()
+		db.Model(&store.MetricRollup{}).
+			Select("COALESCE(SUM(count), 0) as total").
+			Where("metric_type = ? AND bucket_start > ?", metricType, since).
+			Scan(&result)
+	}
 
 	return result.Total
 }
 
+// calculateP99 returns the p99 of a timer metric over the given window. The
+// "last minute" window computes an exact p99 from raw points; longer windows
+// merge the per-minute rollup histograms and compute the p99 of the merged
+// distribution. Because the histograms share fixed bucket boundaries, the merge
+// is exact and the result is a true p99 accurate to a bounded relative error.
 func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Duration) string {
-	since := time.Now().Add(-duration)
-	var values []int64
+	if duration <= time.Minute {
+		since := time.Now().Add(-duration)
+		var values []int64
 
-	db.Model(&store.Metric{}).
-		Select("value").
-		Where("metric_type = ? AND timestamp > ?", metricType, since).
-		Scan(&values)
+		db.Model(&store.Metric{}).
+			Select("value").
+			Where("metric_type = ? AND timestamp > ?", metricType, since).
+			Scan(&values)
 
-	if len(values) == 0 {
+		if len(values) == 0 {
+			return "0ms"
+		}
+
+		sort.Slice(values, func(i, j int) bool {
+			return values[i] < values[j]
+		})
+
+		index := int(math.Ceil(float64(len(values))*0.99)) - 1
+		if index < 0 {
+			index = 0
+		}
+
+		return formatDuration(time.Duration(values[index]))
+	}
+
+	since := time.Now().Add(-duration).Unix()
+	var rollups []store.MetricRollup
+
+	db.Model(&store.MetricRollup{}).
+		Select("histogram").
+		Where("metric_type = ? AND bucket_start > ?", metricType, since).
+		Find(&rollups)
+
+	merged := make(map[int32]int64)
+	for _, r := range rollups {
+		merged = store.MergeHistograms(merged, r.Histogram)
+	}
+
+	p99 := store.HistogramQuantile(merged, 0.99)
+	if p99 == 0 {
 		return "0ms"
 	}
 
-	sort.Slice(values, func(i, j int) bool {
-		return values[i] < values[j]
-	})
-
-	index := int(math.Ceil(float64(len(values))*0.99)) - 1
-	if index < 0 {
-		index = 0
-	}
-
-	return formatDuration(time.Duration(values[index]))
+	return formatDuration(time.Duration(p99))
 }
 
 func formatDuration(d time.Duration) string {

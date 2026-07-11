@@ -27,7 +27,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
-	if err := db.AutoMigrate(&Entity{}, &Metric{}, &Log{}); err != nil {
+	if err := db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{}); err != nil {
 		return nil, err
 	}
 
