@@ -2,6 +2,7 @@ package hal_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestMetricsInstrumentation(t *testing.T) {
 		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
 			light.TurnOn()
 		})
-	
+
 	conn.RegisterAutomations(automation)
 
 	// Trigger a state change that will run automation
@@ -54,14 +55,14 @@ func TestMetricsAutomationTriggered(t *testing.T) {
 	sensor := hal.NewBinarySensor("test.sensor")
 	conn.RegisterEntities(sensor)
 
-	var automationExecuted bool
+	var automationExecuted atomic.Bool
 	automation := hal.NewAutomation().
 		WithName("test_automation").
 		WithEntities(sensor).
 		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
-			automationExecuted = true
+			automationExecuted.Store(true)
 		})
-	
+
 	conn.RegisterAutomations(automation)
 
 	// Trigger automation
@@ -72,10 +73,11 @@ func TestMetricsAutomationTriggered(t *testing.T) {
 			NewState: &homeassistant.State{State: "on"},
 		},
 	})
-	time.Sleep(10 * time.Millisecond)
 
-	// Verify automation was triggered (which means metrics were collected)
-	assert.Assert(t, automationExecuted, "Expected automation to be triggered")
+	// Wait for the automation to run (which means metrics were collected).
+	testutil.WaitFor(t, "automation triggered", func() bool {
+		return automationExecuted.Load()
+	}, func() {})
 }
 
 func TestMetricsIntegrationBasicScenarios(t *testing.T) {
@@ -89,24 +91,24 @@ func TestMetricsIntegrationBasicScenarios(t *testing.T) {
 	conn.RegisterEntities(sensor, light1, light2)
 
 	// Create multiple automations for the same trigger
-	var automation1Executed, automation2Executed bool
-	
+	var automation1Executed, automation2Executed atomic.Bool
+
 	automation1 := hal.NewAutomation().
 		WithName("automation_1").
 		WithEntities(sensor).
 		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
-			automation1Executed = true
+			automation1Executed.Store(true)
 			light1.TurnOn()
 		})
-	
+
 	automation2 := hal.NewAutomation().
 		WithName("automation_2").
 		WithEntities(sensor).
 		WithAction(func(ctx context.Context, trigger hal.EntityInterface) {
-			automation2Executed = true
+			automation2Executed.Store(true)
 			light2.TurnOn()
 		})
-	
+
 	conn.RegisterAutomations(automation1, automation2)
 
 	// Test normal state change (should trigger automations and record metrics)
@@ -117,15 +119,15 @@ func TestMetricsIntegrationBasicScenarios(t *testing.T) {
 			NewState: &homeassistant.State{State: "on"},
 		},
 	})
-	time.Sleep(50 * time.Millisecond)
 
-	// Verify both automations were triggered
-	assert.Assert(t, automation1Executed, "Expected automation 1 to be triggered")
-	assert.Assert(t, automation2Executed, "Expected automation 2 to be triggered")
-	
+	// Wait for both automations to run.
+	testutil.WaitFor(t, "both automations triggered", func() bool {
+		return automation1Executed.Load() && automation2Executed.Load()
+	}, func() {})
+
 	// Reset for next test
-	automation1Executed = false
-	automation2Executed = false
+	automation1Executed.Store(false)
+	automation2Executed.Store(false)
 
 	// Test state change from HAL's own user (should NOT trigger automations)
 	server.SendEvent(homeassistant.Event{
@@ -141,8 +143,8 @@ func TestMetricsIntegrationBasicScenarios(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify automations were NOT triggered (loop protection)
-	assert.Assert(t, !automation1Executed, "Expected automation 1 NOT to be triggered for own actions")
-	assert.Assert(t, !automation2Executed, "Expected automation 2 NOT to be triggered for own actions")
-	
+	assert.Assert(t, !automation1Executed.Load(), "Expected automation 1 NOT to be triggered for own actions")
+	assert.Assert(t, !automation2Executed.Load(), "Expected automation 2 NOT to be triggered for own actions")
+
 	// If we get here without panics/errors, metrics collection is working properly
 }

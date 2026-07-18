@@ -109,17 +109,24 @@ func (s *Service) Start() {
 	default:
 		// Channel is still open
 	}
+	// Capture the current stop channel so the pruning goroutine watches the
+	// channel that was live when it started, rather than reading the shared
+	// field (which Start may replace) without holding the lock.
+	stopChan := s.stopChan
 	hasDB := s.db != nil
 	s.mu.Unlock()
 
 	if hasDB {
-		go s.pruneLogs()
+		go s.pruneLogs(stopChan)
 	}
 	slog.Info("Logging service started")
 }
 
 // Stop stops the logging service
 func (s *Service) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	select {
 	case <-s.stopChan:
 		// Already stopped
@@ -489,14 +496,15 @@ func (s *Service) writeLogText(level slog.Level, entityID string, logText string
 	}
 }
 
-// pruneLogs runs in a goroutine to periodically remove old logs
-func (s *Service) pruneLogs() {
+// pruneLogs runs in a goroutine to periodically remove old logs. It watches the
+// stop channel captured by Start rather than the shared field.
+func (s *Service) pruneLogs(stopChan <-chan struct{}) {
 	ticker := time.NewTicker(s.pruneInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-s.stopChan:
+		case <-stopChan:
 			return
 		case <-ticker.C:
 			s.mu.RLock()

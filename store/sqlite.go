@@ -1,6 +1,8 @@
 package store
 
 import (
+	"strings"
+
 	"github.com/glebarez/sqlite" // Pure go SQLite driver, checkout https://github.com/glebarez/sqlite for details
 	"gorm.io/gorm"
 )
@@ -19,6 +21,20 @@ func Open(path string) (*Store, error) {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, err
+	}
+
+	// In-memory SQLite databases are scoped to a single connection: every new
+	// connection in the pool gets its own empty database, so a migration run on
+	// one connection is invisible to a query that lands on another ("no such
+	// table"). Pin the pool to a single connection so the whole Store shares one
+	// in-memory database. File-backed databases keep the default pool.
+	if strings.Contains(path, ":memory:") {
+		sqlDB, err := db.DB()
+		if err != nil {
+			return nil, err
+		}
+
+		sqlDB.SetMaxOpenConns(1)
 	}
 
 	// Configure SQLite settings
