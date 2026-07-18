@@ -159,6 +159,76 @@ func TestEventsProcessedInOrder(t *testing.T) {
 	assert.Equal(t, expected[n-1], testEntity.GetState().State)
 }
 
+// TestReaderNotBlockedByBlockedHandler verifies that a slow/blocked subscription
+// handler cannot stall the websocket read loop. A service call's result is
+// delivered by the same read loop, so if the reader could block handing a backlog
+// of events to a stuck handler, the call could never receive its result. Here one
+// event blocks the handler while a backlog larger than the channel buffer piles
+// up behind it; a concurrent service call must still complete.
+func TestReaderNotBlockedByBlockedHandler(t *testing.T) {
+	t.Parallel()
+
+	conn, server, cleanup := testutil.NewClientServer(t)
+	defer cleanup()
+
+	testEntity := hal.NewEntity("test.entity")
+	light := hal.NewLight("light.test")
+	conn.RegisterEntities(testEntity, light)
+
+	gate := make(chan struct{})
+
+	var blocked atomic.Bool
+
+	// Released before cleanup (defers run LIFO) so the handler goroutine unblocks.
+	defer close(gate)
+
+	conn.RegisterAutomations(
+		hal.NewAutomation().
+			WithName("test.block").
+			WithEntities(testEntity).
+			WithAction(func(_ context.Context, _ hal.EntityInterface) {
+				// Block the handler on the very first event; later events must
+				// still be read off the socket while it waits here.
+				if blocked.CompareAndSwap(false, true) {
+					<-gate
+				}
+			}),
+	)
+
+	// Far more events than eventChannelBufferSize (256), so the backlog would
+	// overflow a buffered channel and stall the reader without a drainer.
+	for range 300 {
+		server.SendEvent(homeassistant.Event{
+			EventType: "state_changed",
+			EventData: homeassistant.EventData{
+				EntityID: "test.entity",
+				NewState: &homeassistant.State{State: "on"},
+			},
+		})
+	}
+
+	testutil.WaitFor(t, "verify handler is blocked", func() bool {
+		return blocked.Load()
+	}, func() {})
+
+	// Give the reader time to take the whole backlog off the socket.
+	time.Sleep(200 * time.Millisecond)
+
+	// The service call's result flows back through the same read loop, which must
+	// not be stuck behind the backlog feeding the blocked handler.
+	done := make(chan error, 1)
+	go func() {
+		done <- light.TurnOn()
+	}()
+
+	select {
+	case err := <-done:
+		assert.NilError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("service call blocked behind event backlog: read loop stalled")
+	}
+}
+
 // TestStaleStateIgnored verifies that a state update carrying an older
 // LastUpdated than the currently held state is dropped, so an out-of-order event
 // can never overwrite newer state.

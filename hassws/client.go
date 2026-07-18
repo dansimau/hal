@@ -15,12 +15,12 @@ import (
 
 const readTimeoutSeconds = 3
 
-// eventChannelBufferSize bounds the per-listener response channel. The read loop
-// is the single sender, so a buffered channel preserves message order (FIFO)
-// while absorbing bursts that arrive while a handler is busy (e.g. blocked on a
-// synchronous CallService round-trip). It must be large enough that the read
-// loop rarely backpressures, which would otherwise stall CallService responses
-// that flow through the same read loop.
+// eventChannelBufferSize is a small smoothing buffer on the per-listener
+// response channel. The read loop is the single sender, so the channel preserves
+// message order (FIFO). Decoupling the read loop from slow handlers is handled by
+// dispatchInOrder (which drains this channel eagerly into an unbounded queue), so
+// this buffer only needs to cover brief handoff/startup windows, not a full
+// backlog.
 const eventChannelBufferSize = 256
 
 const (
@@ -354,10 +354,11 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 			continue
 		}
 
-		// Deliver sequentially from this single read loop so events reach the
-		// handler in the order Home Assistant sent them. The channel is buffered
-		// (eventChannelBufferSize) so this rarely blocks; the recover() tolerates
-		// a send to a channel closed during shutdown/reconnect.
+		// Deliver sequentially from this single read loop so messages reach the
+		// listener in the order Home Assistant sent them. Subscription listeners
+		// drain this channel eagerly via dispatchInOrder, so a slow/reentrant
+		// handler cannot stall the reader here; the recover() tolerates a send to
+		// a channel closed during shutdown/reconnect.
 		func(responseListenerCh chan []byte) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -516,19 +517,17 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
 	}
 
-	// Create Goroutine to event messages and dispatch to handler
-	go func(ch chan []byte) {
-		for b := range ch {
-			var msg EventMessage
-			if err := json.Unmarshal(b, &msg); err != nil {
-				logger.Error("Error unmarshalling event message", "", "error", err)
+	// Dispatch events to the handler in order, decoupled from the read loop.
+	go c.dispatchInOrder(responseChan, func(b []byte) {
+		var msg EventMessage
+		if err := json.Unmarshal(b, &msg); err != nil {
+			logger.Error("Error unmarshalling event message", "", "error", err)
 
-				continue
-			}
-
-			handler(msg)
+			return
 		}
-	}(responseChan)
+
+		handler(msg)
+	})
 
 	logger.Info("Listening for state changes", "")
 
@@ -575,13 +574,67 @@ func (c *Client) SubscribeEventsRaw(eventType string, handler func([]byte)) erro
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
 	}
 
-	go func(ch chan []byte) {
-		for b := range ch {
-			handler(b)
-		}
-	}(responseChan)
+	go c.dispatchInOrder(responseChan, handler)
 
 	return nil
+}
+
+// dispatchInOrder decouples the shared websocket read loop from a subscription
+// handler. A drainer moves frames off ch immediately (never running handler work
+// inline) into an unbounded, order-preserving queue, and a feeder invokes deliver
+// in receipt order.
+//
+// This matters because a handler may call a synchronous service method (e.g.
+// Light.TurnOn -> CallService) whose result is delivered by this same read loop.
+// If the reader blocked while handing off a backlog of subscription frames, that
+// result could never arrive and the call would time out. Draining eagerly into an
+// unbounded queue keeps the reader free no matter how slow or reentrant a handler
+// is, while a single feeder preserves per-subscription order.
+func (c *Client) dispatchInOrder(ch chan []byte, deliver func([]byte)) {
+	var (
+		mu     sync.Mutex
+		cond   = sync.NewCond(&mu)
+		queue  [][]byte
+		closed bool
+	)
+
+	// Feeder: invoke the handler for each frame, in receipt order.
+	go func() {
+		for {
+			mu.Lock()
+			for len(queue) == 0 && !closed {
+				cond.Wait()
+			}
+
+			if len(queue) == 0 && closed {
+				mu.Unlock()
+
+				return
+			}
+
+			frame := queue[0]
+			queue[0] = nil // release the reference so the frame can be GC'd
+			queue = queue[1:]
+			mu.Unlock()
+
+			deliver(frame)
+		}
+	}()
+
+	// Drainer: move frames off the read loop's channel without blocking on
+	// handler work, preserving order. Exits when the channel is closed on
+	// disconnect/shutdown, then wakes the feeder to finish and return.
+	for b := range ch {
+		mu.Lock()
+		queue = append(queue, b)
+		cond.Signal()
+		mu.Unlock()
+	}
+
+	mu.Lock()
+	closed = true
+	cond.Signal()
+	mu.Unlock()
 }
 
 func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error) {
