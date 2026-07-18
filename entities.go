@@ -2,6 +2,7 @@ package hal
 
 import (
 	"reflect"
+	"sync"
 
 	"github.com/dansimau/hal/homeassistant"
 )
@@ -21,7 +22,11 @@ type Entities []EntityInterface
 // Entity is a base type for all entities that can be embedded into other types.
 type Entity struct {
 	connection *Connection
-	state      homeassistant.State
+
+	// mutex guards state, which is read by automations and user code while the
+	// WebSocket reader goroutine writes incoming state changes.
+	mutex sync.RWMutex
+	state homeassistant.State
 }
 
 func NewEntity(id string) *Entity {
@@ -35,14 +40,23 @@ func (e *Entity) BindConnection(connection *Connection) {
 }
 
 func (e *Entity) GetID() string {
+	e.mutex.RLock()
+	defer e.mutex.RUnlock()
+
 	return e.state.EntityID
 }
 
 func (e *Entity) SetState(state homeassistant.State) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
 	e.state = state
 }
 
 func (e *Entity) GetState() homeassistant.State {
+	e.mutex.RLock()
+	defer e.mutex.RUnlock()
+
 	return e.state
 }
 
