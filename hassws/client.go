@@ -15,6 +15,14 @@ import (
 
 const readTimeoutSeconds = 3
 
+// eventChannelBufferSize bounds the per-listener response channel. The read loop
+// is the single sender, so a buffered channel preserves message order (FIFO)
+// while absorbing bursts that arrive while a handler is busy (e.g. blocked on a
+// synchronous CallService round-trip). It must be large enough that the read
+// loop rarely backpressures, which would otherwise stall CallService responses
+// that flow through the same read loop.
+const eventChannelBufferSize = 256
+
 const (
 	// defaultPingInterval is how often a heartbeat ping is sent to Home
 	// Assistant to keep the connection active and prove it is still alive.
@@ -346,7 +354,11 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 			continue
 		}
 
-		go func(responseListenerCh chan []byte) {
+		// Deliver sequentially from this single read loop so events reach the
+		// handler in the order Home Assistant sent them. The channel is buffered
+		// (eventChannelBufferSize) so this rarely blocks; the recover() tolerates
+		// a send to a channel closed during shutdown/reconnect.
+		func(responseListenerCh chan []byte) {
 			defer func() {
 				if r := recover(); r != nil {
 					c.removeMessageResponseListener(msg.ID)
@@ -408,7 +420,7 @@ func (c *Client) addMessageResponseListener(msgID int) (ch chan []byte) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	ch = make(chan []byte)
+	ch = make(chan []byte, eventChannelBufferSize)
 	c.responses[msgID] = ch
 
 	return ch
