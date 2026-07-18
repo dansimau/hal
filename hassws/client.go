@@ -15,13 +15,19 @@ import (
 
 const readTimeoutSeconds = 3
 
-// eventChannelBufferSize bounds the per-listener response channel. The read loop
-// is the single sender, so a buffered channel preserves message order (FIFO)
-// while absorbing bursts that arrive while a handler is busy (e.g. blocked on a
-// synchronous CallService round-trip). It must be large enough that the read
-// loop rarely backpressures, which would otherwise stall CallService responses
-// that flow through the same read loop.
+// eventChannelBufferSize bounds the per-subscription response channel. The read
+// loop is the single sender, so a buffered channel preserves message order
+// (FIFO) while absorbing bursts. Subscription frames are drained off this
+// channel promptly by runOrderedHandler (which decouples handler execution from
+// draining), so this only needs to cover scheduling jitter, not a slow handler.
 const eventChannelBufferSize = 256
+
+// oneShotResponseBufferSize buffers the single expected response for one-shot
+// requests (CallService, GetStates). A buffer of one lets the read loop deliver
+// that response without blocking even if the caller has already timed out, and
+// the listener is removed as soon as the caller is done, so unlike a
+// subscription it does not retain a large buffer for the connection's lifetime.
+const oneShotResponseBufferSize = 1
 
 const (
 	// defaultPingInterval is how often a heartbeat ping is sent to Home
@@ -355,9 +361,10 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 		}
 
 		// Deliver sequentially from this single read loop so events reach the
-		// handler in the order Home Assistant sent them. The channel is buffered
-		// (eventChannelBufferSize) so this rarely blocks; the recover() tolerates
-		// a send to a channel closed during shutdown/reconnect.
+		// handler in the order Home Assistant sent them. Listener channels are
+		// buffered and subscription frames are drained promptly by
+		// runOrderedHandler, so this rarely blocks; the recover() tolerates a
+		// send to a channel closed during shutdown/reconnect.
 		func(responseListenerCh chan []byte) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -415,12 +422,15 @@ func (c *Client) send(msg any) error {
 	return c.writeMessage(c.conn, websocket.TextMessage, msgBytes)
 }
 
-// Add a listener channel for a response to a specific sent message.
-func (c *Client) addMessageResponseListener(msgID int) (ch chan []byte) {
+// Add a listener channel for a response to a specific sent message. bufferSize
+// bounds the channel: one-shot requests use a small buffer and remove the
+// listener once done, while long-lived subscriptions use a larger buffer to
+// absorb bursts.
+func (c *Client) addMessageResponseListener(msgID, bufferSize int) (ch chan []byte) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	ch = make(chan []byte, eventChannelBufferSize)
+	ch = make(chan []byte, bufferSize)
 	c.responses[msgID] = ch
 
 	return ch
@@ -433,36 +443,49 @@ func (c *Client) removeMessageResponseListener(msgID int) {
 	delete(c.responses, msgID)
 }
 
-// Send a message to the websocket and return a channel to listen for responses.
-func (c *Client) sendMessageStreamResponses(msgBytes []byte) (ch chan []byte, err error) {
+// registerAndSend assigns a unique ID to the message, registers a response
+// listener with the given buffer size, and sends it. It returns the message ID
+// and the listener channel. On send failure the listener is removed so it does
+// not linger in c.responses.
+func (c *Client) registerAndSend(msgBytes []byte, bufferSize int) (msgID int, ch chan []byte, err error) {
 	var msg jsonMessage
 	if err := json.Unmarshal(msgBytes, &msg); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
-	msgID := c.nextMsgID()
+	msgID = c.nextMsgID()
 	msg["id"] = msgID
 
-	ch = c.addMessageResponseListener(msgID)
+	ch = c.addMessageResponseListener(msgID, bufferSize)
 
 	if err := c.send(msg); err != nil {
-		return nil, err
+		c.removeMessageResponseListener(msgID)
+
+		return 0, nil, err
 	}
 
-	return ch, nil
+	return msgID, ch, nil
 }
 
-// Send a message to the websocket and wait for a response.
+// Send a message to the websocket and return a channel to listen for a stream of
+// responses (e.g. a subscription). The listener lives for the connection's
+// lifetime, so it uses a larger buffer to absorb bursts.
+func (c *Client) sendMessageStreamResponses(msgBytes []byte) (ch chan []byte, err error) {
+	_, ch, err = c.registerAndSend(msgBytes, eventChannelBufferSize)
+
+	return ch, err
+}
+
+// Send a message to the websocket and wait for a single response.
 func (c *Client) sendMessageWaitResponse(msgBytes []byte) (response []byte, err error) {
-	responseChan, err := c.sendMessageStreamResponses(msgBytes)
+	msgID, responseChan, err := c.registerAndSend(msgBytes, oneShotResponseBufferSize)
 	if err != nil {
 		return nil, err
 	}
 
-	// Close channel after receiving first response
-	defer func() {
-		close(responseChan)
-	}()
+	// One-shot request: remove the listener once we are done so neither it nor
+	// its buffer lingers in c.responses for the lifetime of the connection.
+	defer c.removeMessageResponseListener(msgID)
 
 	return c.readMesssageFromChannel(responseChan)
 }
@@ -474,6 +497,90 @@ func (c *Client) readMesssageFromChannel(ch chan []byte) (response []byte, err e
 		return res, nil
 	case <-time.After(readTimeoutSeconds * time.Second):
 		return nil, ErrReadTimeout
+	}
+}
+
+// frameQueue is an unbounded, order-preserving FIFO of raw websocket frames
+// with a single producer and a single consumer. It lets a subscription's frames
+// be moved off the shared response channel immediately, without waiting for a
+// (potentially slow) handler to finish, so the read loop is never blocked.
+type frameQueue struct {
+	mutex  sync.Mutex
+	cond   *sync.Cond
+	buf    [][]byte
+	closed bool
+}
+
+func newFrameQueue() *frameQueue {
+	q := &frameQueue{}
+	q.cond = sync.NewCond(&q.mutex)
+
+	return q
+}
+
+// push appends a frame. It never blocks the caller (the read loop).
+func (q *frameQueue) push(b []byte) {
+	q.mutex.Lock()
+	q.buf = append(q.buf, b)
+	q.mutex.Unlock()
+
+	q.cond.Signal()
+}
+
+// close marks the queue closed. pop returns the remaining frames and then
+// reports the queue as drained.
+func (q *frameQueue) close() {
+	q.mutex.Lock()
+	q.closed = true
+	q.mutex.Unlock()
+
+	q.cond.Broadcast()
+}
+
+// pop blocks until a frame is available and returns it, or returns ok=false once
+// the queue is closed and fully drained.
+func (q *frameQueue) pop() (b []byte, ok bool) {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	for len(q.buf) == 0 && !q.closed {
+		q.cond.Wait()
+	}
+
+	if len(q.buf) == 0 {
+		return nil, false
+	}
+
+	b = q.buf[0]
+	q.buf = q.buf[1:]
+
+	return b, true
+}
+
+// runOrderedHandler consumes raw frames from ch and invokes handle for each, in
+// receipt order. It decouples draining ch from running handle: frames are moved
+// off ch into an unbounded queue as fast as they arrive, while handle runs one
+// at a time from that queue. This ensures a handler that blocks (e.g. one making
+// a synchronous CallService whose result is delivered by the same read loop)
+// can never fill ch and stall the shared read loop.
+func runOrderedHandler(ch chan []byte, handle func([]byte)) {
+	queue := newFrameQueue()
+
+	go func() {
+		for b := range ch {
+			queue.push(b)
+		}
+
+		queue.close()
+	}()
+
+	for {
+		b, ok := queue.pop()
+		if !ok {
+			return
+		}
+
+		handle(b)
 	}
 }
 
@@ -516,19 +623,18 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
 	}
 
-	// Create Goroutine to event messages and dispatch to handler
-	go func(ch chan []byte) {
-		for b := range ch {
-			var msg EventMessage
-			if err := json.Unmarshal(b, &msg); err != nil {
-				logger.Error("Error unmarshalling event message", "", "error", err)
+	// Dispatch events to the handler in order. runOrderedHandler drains
+	// responseChan promptly so a slow handler cannot back up the shared read loop.
+	go runOrderedHandler(responseChan, func(b []byte) {
+		var msg EventMessage
+		if err := json.Unmarshal(b, &msg); err != nil {
+			logger.Error("Error unmarshalling event message", "", "error", err)
 
-				continue
-			}
-
-			handler(msg)
+			return
 		}
-	}(responseChan)
+
+		handler(msg)
+	})
 
 	logger.Info("Listening for state changes", "")
 
@@ -575,11 +681,9 @@ func (c *Client) SubscribeEventsRaw(eventType string, handler func([]byte)) erro
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
 	}
 
-	go func(ch chan []byte) {
-		for b := range ch {
-			handler(b)
-		}
-	}(responseChan)
+	// Dispatch raw frames to the handler in order. runOrderedHandler drains
+	// responseChan promptly so a slow handler cannot back up the shared read loop.
+	go runOrderedHandler(responseChan, handler)
 
 	return nil
 }

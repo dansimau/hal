@@ -287,3 +287,60 @@ func TestNilStateLeavesStateUnchanged(t *testing.T) {
 	assert.Equal(t, "on", testEntity.GetState().State)
 	assert.Equal(t, int32(2), automationTriggered.Load())
 }
+
+// TestUntimestampedUpdateAppliesAfterTimestampedState verifies that an update
+// carrying no LastUpdated (zero time) still applies even after the entity holds
+// a timestamped state. Such updates are produced by tests and by the mock
+// CallService state changes; the staleness guard must only compare when the
+// incoming update actually carries a timestamp, otherwise every untimestamped
+// update would look "older" than a previously synced state and be dropped.
+func TestUntimestampedUpdateAppliesAfterTimestampedState(t *testing.T) {
+	t.Parallel()
+
+	conn, server, cleanup := testutil.NewClientServer(t)
+	defer cleanup()
+
+	var automationTriggered atomic.Int32
+
+	testEntity := hal.NewEntity("test.entity")
+	conn.RegisterEntities(testEntity)
+
+	conn.RegisterAutomations(
+		hal.NewAutomation().
+			WithName("test.automation").
+			WithEntities(testEntity).
+			WithAction(func(_ context.Context, _ hal.EntityInterface) {
+				automationTriggered.Add(1)
+			}),
+	)
+
+	t1 := time.Date(2026, 7, 17, 23, 0, 15, 0, time.UTC)
+
+	// Timestamped "on" state, as a sync from GetStates or a real event would set.
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
+		EventData: homeassistant.EventData{
+			EntityID: "test.entity",
+			NewState: &homeassistant.State{State: "on", LastUpdated: t1},
+		},
+	})
+
+	// Untimestamped "off" update (zero LastUpdated) must still apply, not be
+	// treated as stale relative to the timestamped state above.
+	server.SendEvent(homeassistant.Event{
+		EventType: "state_changed",
+		EventData: homeassistant.EventData{
+			EntityID: "test.entity",
+			NewState: &homeassistant.State{State: "off"},
+		},
+	})
+
+	testutil.WaitFor(t, "verify untimestamped update applied", func() bool {
+		return automationTriggered.Load() == 2
+	}, func() {
+		spew.Dump(automationTriggered.Load(), testEntity.GetState())
+	})
+
+	assert.Equal(t, "off", testEntity.GetState().State)
+	assert.Equal(t, int32(2), automationTriggered.Load())
+}

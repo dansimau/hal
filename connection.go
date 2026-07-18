@@ -285,8 +285,13 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	// Drop stale updates that arrive out of order. Home Assistant events can be
 	// reordered in transit, and a reconnect resync can race with live events; an
 	// older state must never overwrite a newer one. Equal timestamps still apply.
+	//
+	// Only compare when the incoming update carries a timestamp: some updates
+	// (test fixtures, mock CallService state changes) set only State/EntityID and
+	// leave LastUpdated at its zero value. Those must still apply, otherwise they
+	// would always look "older" than a previously synced, timestamped state.
 	current := entity.GetState()
-	if !current.LastUpdated.IsZero() && newState.LastUpdated.Before(current.LastUpdated) {
+	if !newState.LastUpdated.IsZero() && newState.LastUpdated.Before(current.LastUpdated) {
 		logger.Debug("Skipping stale state update", event.Event.EventData.EntityID)
 
 		return
