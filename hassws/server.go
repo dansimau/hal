@@ -39,7 +39,19 @@ type Server struct {
 	// stops delivering data, exercising the client's staleness detection.
 	respondToPings atomic.Bool
 
+	// states are the entity states returned in response to GetStates requests.
+	// Tests set these via SetStates to exercise the client's initial state sync.
+	states []homeassistant.State
+
 	lock sync.RWMutex
+}
+
+// SetStates sets the entity states the server returns for GetStates requests.
+func (s *Server) SetStates(states []homeassistant.State) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	s.states = states
 }
 
 func NewServer(validUsers map[string]string) (*Server, error) {
@@ -197,14 +209,24 @@ func (s *Server) listen() {
 			})
 
 		case MessageTypeGetStates:
+			s.lock.RLock()
+			states := s.states
+			s.lock.RUnlock()
+
+			if states == nil {
+				states = []homeassistant.State{}
+			}
+
+			result, err := json.Marshal(states)
+			if err != nil {
+				panic(err)
+			}
+
 			s.SendMessage(CommandResponse{
 				ID:      cmd.ID,
 				Type:    MessageTypeResult,
 				Success: true,
-				// TODO: Either keep state on the server site, or allow testers
-				// to set it. For now we just leave it empty so tests don't
-				// crash.
-				Result: json.RawMessage("[]"),
+				Result:  result,
 			})
 
 		case MessageTypePing:

@@ -265,13 +265,26 @@ func TestCallService(t *testing.T) {
 func TestGetStates(t *testing.T) {
 	t.Parallel()
 
-	client, _ := newTestClient(t, ClientConfig{})
+	client, server := newTestClient(t, ClientConfig{})
 	connect(t, client)
 
-	// The mock server always returns an empty state list.
+	// By default the mock server returns an empty state list.
 	states, err := client.GetStates()
 	assert.NilError(t, err)
 	assert.Equal(t, len(states), 0)
+
+	// Tests can populate the states the server serves.
+	server.SetStates([]homeassistant.State{
+		{EntityID: "light.kitchen", State: "on", Attributes: map[string]any{"brightness": float64(200)}},
+		{EntityID: "sensor.temp", State: "21"},
+	})
+
+	states, err = client.GetStates()
+	assert.NilError(t, err)
+	assert.Equal(t, len(states), 2)
+	assert.Equal(t, states[0].EntityID, "light.kitchen")
+	assert.Equal(t, states[0].State, "on")
+	assert.Equal(t, states[1].EntityID, "sensor.temp")
 }
 
 func TestSubscribeEvents(t *testing.T) {
