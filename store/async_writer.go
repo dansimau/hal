@@ -94,6 +94,22 @@ func (aw *AsyncWriter) Enqueue(op WriteOperation) {
 	}
 	aw.mu.Unlock()
 
+	// If the writer is already shutting down, run synchronously as a last resort.
+	// This must be checked before the queue send below: once the context is
+	// cancelled the worker has stopped draining the queue, so an op that landed
+	// in the (still-writable) buffered queue would never run. A plain two-case
+	// select would pick between the ready queue-send and ctx.Done() at random,
+	// which both drops writes and can wedge WaitForWrites forever.
+	select {
+	case <-aw.ctx.Done():
+		if err := op(aw.db); err != nil {
+			slog.Error("Database write failed (writer shutdown)", "error", err)
+		}
+
+		return
+	default:
+	}
+
 	select {
 	case aw.queue <- op:
 		// Write queued successfully

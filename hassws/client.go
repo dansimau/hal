@@ -179,11 +179,22 @@ func (c *Client) authenticate() error {
 func (c *Client) Close() error {
 	c.setState(stateDisconnected)
 
+	// Closing a client that was never connected (or already shut down) is a
+	// no-op rather than a nil-pointer panic.
+	if c.conn == nil {
+		return nil
+	}
+
 	return c.writeMessage(c.conn, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
 }
 
 func (c *Client) shutdown() error {
 	c.setState(stateDisconnected)
+
+	if c.conn == nil {
+		return nil
+	}
+
 	return c.conn.Close()
 }
 
@@ -381,6 +392,10 @@ func (c *Client) nextMsgID() int {
 
 // Read a message from the websocket and unmarshal it into the target.
 func (c *Client) read(target any) error {
+	if c.conn == nil {
+		return ErrNotConnected
+	}
+
 	_, msgBytes, err := c.conn.ReadMessage()
 	if err != nil {
 		return err
@@ -411,6 +426,10 @@ func (c *Client) send(msg any) error {
 	msgBytes, err := json.Marshal(msg)
 	if err != nil {
 		return err
+	}
+
+	if c.conn == nil {
+		return ErrNotConnected
 	}
 
 	logger.DebugJSON("Writing message", "", string(msgBytes))
@@ -449,6 +468,10 @@ func (c *Client) sendMessageStreamResponses(msgBytes []byte) (ch chan []byte, er
 	ch = c.addMessageResponseListener(msgID)
 
 	if err := c.send(msg); err != nil {
+		// Send failed, so no response will ever arrive; drop the listener we
+		// just registered instead of leaking it in the responses map.
+		c.removeMessageResponseListener(msgID)
+
 		return nil, err
 	}
 
@@ -467,11 +490,11 @@ func (c *Client) sendMessageWaitResponse(msgBytes []byte) (response []byte, err 
 		close(responseChan)
 	}()
 
-	return c.readMesssageFromChannel(responseChan)
+	return c.readMessageFromChannel(responseChan)
 }
 
 // Read a message from a listener channel.
-func (c *Client) readMesssageFromChannel(ch chan []byte) (response []byte, err error) {
+func (c *Client) readMessageFromChannel(ch chan []byte) (response []byte, err error) {
 	select {
 	case res := <-ch:
 		return res, nil
@@ -499,7 +522,7 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 	}
 
 	// First message contains the initial response about the subscription
-	resBytes, err := c.readMesssageFromChannel(responseChan)
+	resBytes, err := c.readMessageFromChannel(responseChan)
 	if err != nil {
 		close(responseChan)
 
@@ -559,7 +582,7 @@ func (c *Client) SubscribeEventsRaw(eventType string, handler func([]byte)) erro
 		return err
 	}
 
-	resBytes, err := c.readMesssageFromChannel(responseChan)
+	resBytes, err := c.readMessageFromChannel(responseChan)
 	if err != nil {
 		close(responseChan)
 
