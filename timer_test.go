@@ -1,6 +1,7 @@
 package hal_test
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,17 +11,17 @@ import (
 func TestTimer(t *testing.T) {
 	t.Parallel()
 
-	timerRan := false
+	var timerRan atomic.Bool
 
 	var timer hal.Timer
 
 	timer.Start(func() {
-		timerRan = true
+		timerRan.Store(true)
 	}, 100*time.Millisecond)
 
 	time.Sleep(200 * time.Millisecond)
 
-	if !timerRan {
+	if !timerRan.Load() {
 		t.Error("Timer did not run")
 	}
 }

@@ -73,10 +73,11 @@ func TestMetricsAutomationTriggered(t *testing.T) {
 			NewState: &homeassistant.State{State: "on"},
 		},
 	})
-	time.Sleep(10 * time.Millisecond)
 
-	// Verify automation was triggered (which means metrics were collected)
-	assert.Assert(t, automationExecuted.Load(), "Expected automation to be triggered")
+	// Wait for the automation to run (which means metrics were collected).
+	testutil.WaitFor(t, "automation triggered", func() bool {
+		return automationExecuted.Load()
+	}, func() {})
 }
 
 func TestMetricsIntegrationBasicScenarios(t *testing.T) {
@@ -118,11 +119,11 @@ func TestMetricsIntegrationBasicScenarios(t *testing.T) {
 			NewState: &homeassistant.State{State: "on"},
 		},
 	})
-	time.Sleep(50 * time.Millisecond)
 
-	// Verify both automations were triggered
-	assert.Assert(t, automation1Executed.Load(), "Expected automation 1 to be triggered")
-	assert.Assert(t, automation2Executed.Load(), "Expected automation 2 to be triggered")
+	// Wait for both automations to run.
+	testutil.WaitFor(t, "both automations triggered", func() bool {
+		return automation1Executed.Load() && automation2Executed.Load()
+	}, func() {})
 
 	// Reset for next test
 	automation1Executed.Store(false)
