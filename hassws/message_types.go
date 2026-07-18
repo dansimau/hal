@@ -7,9 +7,6 @@ import (
 )
 
 const (
-	MessageTypeAuthChallenge   MessageType = "auth_challenge"
-	MessageTypeAuthRequest     MessageType = "auth_request"
-	MessageTypeAuthResponse    MessageType = "auth_response"
 	MessageTypeCallService     MessageType = "call_service"
 	MessageTypeEvent           MessageType = "event"
 	MessageTypeGetStates       MessageType = "get_states"

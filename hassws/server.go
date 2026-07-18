@@ -78,7 +78,10 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.lock.Lock()
 	s.websocket = conn
+	s.lock.Unlock()
+
 	defer conn.Close()
 
 	if err := s.handleAuthentication(conn); err != nil {
@@ -220,13 +223,23 @@ func (s *Server) listen() {
 	}
 }
 
+// writeJSON serializes a JSON write to the client connection under the same
+// lock as SendMessage. Gorilla forbids concurrent writers, so every write path
+// (auth handshake, SendMessage, Close) must share this lock to stay race-free.
+func (s *Server) writeJSON(conn *websocket.Conn, v any) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	return conn.WriteJSON(v)
+}
+
 func (s *Server) handleAuthentication(conn *websocket.Conn) error {
 	// Send auth_required message
 	authChallenge := AuthChallenge{
 		Type:      "auth_required",
 		HAVersion: "2024.1.0",
 	}
-	if err := conn.WriteJSON(authChallenge); err != nil {
+	if err := s.writeJSON(conn, authChallenge); err != nil {
 		return err
 	}
 
@@ -244,7 +257,7 @@ func (s *Server) handleAuthentication(conn *websocket.Conn) error {
 			Message:   "Invalid access token",
 			HAVersion: "2024.1.0",
 		}
-		return conn.WriteJSON(authResp)
+		return s.writeJSON(conn, authResp)
 	}
 
 	// Store authenticated user ID
@@ -255,10 +268,13 @@ func (s *Server) handleAuthentication(conn *websocket.Conn) error {
 		HAVersion: "2024.1.0",
 	}
 
-	return conn.WriteJSON(authResp)
+	return s.writeJSON(conn, authResp)
 }
 
 func (s *Server) Close() error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	return s.websocket.WriteMessage(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"),
@@ -284,9 +300,11 @@ func (s *Server) DisconnectClient() error {
 func (s *Server) shutdown() error {
 	var errs []error
 
+	s.lock.Lock()
 	if s.websocket != nil {
 		errs = append(errs, s.websocket.Close())
 	}
+	s.lock.Unlock()
 
 	if s.http != nil {
 		errs = append(errs, s.http.Close())
