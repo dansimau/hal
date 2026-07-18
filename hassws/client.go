@@ -15,6 +15,16 @@ import (
 
 const readTimeoutSeconds = 3
 
+// eventChannelBufferSize is the buffer on each per-listener response channel. The
+// read loop is the single sender, so the channel preserves message order (FIFO),
+// and the large buffer absorbs event bursts so the reader keeps making progress
+// even while a handler is busy (e.g. blocked on a synchronous CallService whose
+// reply is delivered by this same read loop). If the buffer ever fills the reader
+// backpressures, which could time out an in-flight service call, but this is
+// self-healing (the call times out, the handler unblocks, the backlog drains) and
+// needs a burst larger than this buffer within the call timeout to occur at all.
+const eventChannelBufferSize = 8192
+
 const (
 	// defaultPingInterval is how often a heartbeat ping is sent to Home
 	// Assistant to keep the connection active and prove it is still alive.
@@ -346,7 +356,12 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 			continue
 		}
 
-		go func(responseListenerCh chan []byte) {
+		// Deliver sequentially from this single read loop so messages reach the
+		// listener in the order Home Assistant sent them. The channel is heavily
+		// buffered (eventChannelBufferSize) so this send effectively never blocks;
+		// the recover() tolerates a send to a channel closed during
+		// shutdown/reconnect.
+		func(responseListenerCh chan []byte) {
 			defer func() {
 				if r := recover(); r != nil {
 					c.removeMessageResponseListener(msg.ID)
@@ -408,7 +423,7 @@ func (c *Client) addMessageResponseListener(msgID int) (ch chan []byte) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	ch = make(chan []byte)
+	ch = make(chan []byte, eventChannelBufferSize)
 	c.responses[msgID] = ch
 
 	return ch
@@ -504,7 +519,8 @@ func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) e
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
 	}
 
-	// Create Goroutine to event messages and dispatch to handler
+	// Consume events in order. A single consumer over a FIFO channel preserves
+	// the order Home Assistant sent them.
 	go func(ch chan []byte) {
 		for b := range ch {
 			var msg EventMessage
@@ -563,6 +579,7 @@ func (c *Client) SubscribeEventsRaw(eventType string, handler func([]byte)) erro
 		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
 	}
 
+	// Consume events in order (single consumer over a FIFO channel).
 	go func(ch chan []byte) {
 		for b := range ch {
 			handler(b)

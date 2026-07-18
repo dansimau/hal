@@ -274,19 +274,34 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 
 	logger.InfoDiff("State changed for", event.Event.EventData.EntityID, cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
 
-	if event.Event.EventData.NewState != nil {
-		entity.SetState(*event.Event.EventData.NewState)
+	// A nil NewState carries no state to apply (e.g. entity removed); leave the
+	// stored state untouched rather than overwriting it with nil.
+	if event.Event.EventData.NewState == nil {
+		return
 	}
+
+	newState := *event.Event.EventData.NewState
+
+	// Drop stale updates that arrive out of order. Home Assistant events can be
+	// reordered in transit, and a reconnect resync can race with live events; an
+	// older state must never overwrite a newer one. Equal timestamps still apply.
+	current := entity.GetState()
+	if !current.LastUpdated.IsZero() && newState.LastUpdated.Before(current.LastUpdated) {
+		logger.Debug("Skipping stale state update", event.Event.EventData.EntityID)
+
+		return
+	}
+
+	entity.SetState(newState)
 
 	// Update database asynchronously
 	entityID := event.Event.EventData.EntityID
-	newState := event.Event.EventData.NewState
 	h.db.EnqueueWrite(func(db *gorm.DB) error {
 		return db.Clauses(clause.OnConflict{
 			UpdateAll: true,
 		}).Create(&store.Entity{
 			ID:    entityID,
-			State: newState,
+			State: &newState,
 		}).Error
 	})
 
