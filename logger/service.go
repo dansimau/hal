@@ -360,12 +360,24 @@ func (s *Service) WarnContext(ctx context.Context, msg string, args ...any) {
 	s.Warn(msg, entityID, args...)
 }
 
+// contextKey is the type for context keys used to attach automation metadata.
+type contextKey string
+
+const (
+	// EntityIDKey is the context key for the triggering entity ID. It is the
+	// canonical key: callers (e.g. hal.NewAutomationContext) must store values
+	// under it so the *Context loggers can read them back across packages.
+	// A function-local key type would never compare equal to the caller's, so
+	// these must live at package scope.
+	EntityIDKey contextKey = "entity_id"
+
+	// AutomationNameKey is the context key for the automation name.
+	AutomationNameKey contextKey = "automation_name"
+)
+
 // getEntityIDFromContext extracts the entity ID from context
 func getEntityIDFromContext(ctx context.Context) string {
-	type contextKey string
-	const entityIDKey contextKey = "entity_id"
-
-	if entityID, ok := ctx.Value(entityIDKey).(string); ok {
+	if entityID, ok := ctx.Value(EntityIDKey).(string); ok {
 		return entityID
 	}
 	return ""
@@ -373,10 +385,7 @@ func getEntityIDFromContext(ctx context.Context) string {
 
 // getAutomationNameFromContext extracts the automation name from context
 func getAutomationNameFromContext(ctx context.Context) string {
-	type contextKey string
-	const automationNameKey contextKey = "automation_name"
-
-	if name, ok := ctx.Value(automationNameKey).(string); ok {
+	if name, ok := ctx.Value(AutomationNameKey).(string); ok {
 		return name
 	}
 	return ""
