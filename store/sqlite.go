@@ -3,6 +3,8 @@ package store
 import (
 	"strings"
 
+	"github.com/dansimau/hal/homeassistant"
+
 	"github.com/glebarez/sqlite" // Pure go SQLite driver, checkout https://github.com/glebarez/sqlite for details
 	"gorm.io/gorm"
 )
@@ -16,8 +18,11 @@ type Store struct {
 func Open(path string) (*Store, error) {
 	// auto_vacuum must be set before the database is created. busy_timeout lets
 	// concurrent writers (the async writer, the rollup loop, and separate CLI
-	// processes) wait for the lock instead of failing with SQLITE_BUSY.
-	dsn := path + "?_pragma=auto_vacuum(FULL)&_pragma=busy_timeout(5000)"
+	// processes) wait for the lock instead of failing with SQLITE_BUSY. Pragmas
+	// are set in the DSN so they apply to every connection in the pool, not just
+	// the one that happens to run an Exec.
+	dsn := path + "?_pragma=auto_vacuum(FULL)&_pragma=busy_timeout(5000)" +
+		"&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, err
@@ -37,14 +42,6 @@ func Open(path string) (*Store, error) {
 		sqlDB.SetMaxOpenConns(1)
 	}
 
-	// Configure SQLite settings
-	if err := db.Exec("PRAGMA journal_mode = WAL").Error; err != nil {
-		return nil, err
-	}
-	if err := db.Exec("PRAGMA synchronous = NORMAL").Error; err != nil {
-		return nil, err
-	}
-
 	if err := db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{}); err != nil {
 		return nil, err
 	}
@@ -59,9 +56,20 @@ func Open(path string) (*Store, error) {
 	}, nil
 }
 
-// EnqueueWrite adds a write operation to the async queue.
+// EnqueueWrite adds a write operation to the async queue. It never blocks; the
+// write is dropped if the queue is full.
 func (s *Store) EnqueueWrite(op WriteOperation) {
 	s.asyncWriter.Enqueue(op)
+}
+
+// EnqueueEntityState asynchronously persists the latest state of an entity.
+func (s *Store) EnqueueEntityState(id string, state *homeassistant.State) {
+	s.asyncWriter.EnqueueEntityState(id, state)
+}
+
+// DroppedWrites returns the number of writes dropped because the queue was full.
+func (s *Store) DroppedWrites() int64 {
+	return s.asyncWriter.Dropped()
 }
 
 // WaitForWrites blocks until all queued writes complete (for testing).
