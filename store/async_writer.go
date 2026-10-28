@@ -133,8 +133,9 @@ collect:
 	return batch
 }
 
-// writeBatch commits a batch in one transaction. If the transaction fails, each
-// operation is retried individually so one bad write does not lose the others.
+// writeBatch commits a batch in one transaction, running each operation exactly
+// once. Each operation runs inside its own savepoint, so a failing operation is
+// rolled back and logged without losing the rest of the batch.
 func (aw *AsyncWriter) writeBatch(batch []queuedOp) {
 	if len(batch) == 0 {
 		return
@@ -150,20 +151,25 @@ func (aw *AsyncWriter) writeBatch(batch []queuedOp) {
 
 	err := aw.db.Transaction(func(tx *gorm.DB) error {
 		for _, q := range batch {
+			if err := tx.Exec("SAVEPOINT async_write").Error; err != nil {
+				return err
+			}
+
 			if err := q.op(tx); err != nil {
+				slog.Error("Async database write failed", "error", err)
+				if err := tx.Exec("ROLLBACK TO SAVEPOINT async_write").Error; err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Exec("RELEASE SAVEPOINT async_write").Error; err != nil {
 				return err
 			}
 		}
 		return nil
 	})
-	if err == nil {
-		return
-	}
-
-	for _, q := range batch {
-		if err := q.op(aw.db); err != nil {
-			slog.Error("Async database write failed", "error", err)
-		}
+	if err != nil {
+		slog.Error("Async database batch commit failed", "error", err, "operations", len(batch))
 	}
 }
 
