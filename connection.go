@@ -12,8 +12,6 @@ import (
 	"github.com/dansimau/hal/perf"
 	"github.com/dansimau/hal/store"
 	"github.com/google/go-cmp/cmp"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // Connection is a new instance of the HAL framework. It connects to Home Assistant,
@@ -296,14 +294,7 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 
 	// Update database asynchronously
 	entityID := event.Event.EventData.EntityID
-	h.db.EnqueueWrite(func(db *gorm.DB) error {
-		return db.Clauses(clause.OnConflict{
-			UpdateAll: true,
-		}).Create(&store.Entity{
-			ID:    entityID,
-			State: &newState,
-		}).Error
-	})
+	h.db.EnqueueEntityState(entityID, &newState)
 
 	// Prevent loops by not running automations that originate from hal
 	if event.Event.Context.UserID == h.config.HomeAssistant.UserID {
