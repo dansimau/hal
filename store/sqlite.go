@@ -58,6 +58,18 @@ func Open(path string) (*Store, error) {
 		untrack = trackOpen(file)
 	}
 
+	// fail closes the database before forgetting it as open in this process:
+	// while SQLite has the file open, the copy-on-write check must not run on it.
+	fail := func(err error) (*Store, error) {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+
+		untrack()
+
+		return nil, err
+	}
+
 	// In-memory SQLite databases are scoped to a single connection: every new
 	// connection in the pool gets its own empty database, so a migration run on
 	// one connection is invisible to a query that lands on another ("no such
@@ -66,16 +78,14 @@ func Open(path string) (*Store, error) {
 	if strings.Contains(path, ":memory:") {
 		sqlDB, err := db.DB()
 		if err != nil {
-			untrack()
-			return nil, err
+			return fail(err)
 		}
 
 		sqlDB.SetMaxOpenConns(1)
 	}
 
 	if err := db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{}); err != nil {
-		untrack()
-		return nil, err
+		return fail(err)
 	}
 
 	// Create and start async writer

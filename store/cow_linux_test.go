@@ -120,3 +120,58 @@ func TestTrackOpen(t *testing.T) {
 	untrackB()
 	assert.Assert(t, !isOpenInProcess(path))
 }
+
+// openDescriptors counts this process's file descriptors open on path,
+// matching by inode so differently spelled paths (e.g. via symlinks) count.
+func openDescriptors(t *testing.T, path string) int {
+	t.Helper()
+
+	want, err := os.Stat(path)
+	assert.NilError(t, err)
+
+	entries, err := os.ReadDir("/proc/self/fd")
+	assert.NilError(t, err)
+
+	n := 0
+	for _, e := range entries {
+		if got, err := os.Stat("/proc/self/fd/" + e.Name()); err == nil && os.SameFile(got, want) {
+			n++
+		}
+	}
+
+	return n
+}
+
+// TestFailedOpenClosesDatabase verifies that when Open fails after SQLite has
+// opened the file, the file is closed before it is forgotten as open in this
+// process, so a later Open never runs the copy-on-write check while SQLite
+// still has the file open.
+func TestFailedOpenClosesDatabase(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Sanity check that openDescriptors sees SQLite's descriptors at all
+	okPath := dir + "/ok.db"
+	ok, err := Open(okPath)
+	assert.NilError(t, err)
+	assert.NilError(t, ok.Exec("SELECT 1").Error)
+	assert.Assert(t, openDescriptors(t, okPath) > 0)
+	assert.NilError(t, ok.Close())
+	assert.Equal(t, openDescriptors(t, okPath), 0)
+
+	// A view named "logs" makes AutoMigrate fail after SQLite has opened the
+	// (valid) database
+	path := dir + "/conflict.db"
+	raw, err := sql.Open("sqlite", path)
+	assert.NilError(t, err)
+	_, err = raw.Exec("CREATE VIEW logs AS SELECT 1 AS id")
+	assert.NilError(t, err)
+	assert.NilError(t, raw.Close())
+
+	_, err = Open(path)
+	assert.ErrorContains(t, err, "logs")
+
+	assert.Equal(t, openDescriptors(t, path), 0)
+	assert.Assert(t, !isOpenInProcess(path))
+}
