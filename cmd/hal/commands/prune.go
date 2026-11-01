@@ -61,9 +61,6 @@ func runPruneLogsCommand(lastDuration, beforeTime string) error {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Build delete query with filters
-	query := db.Model(&store.Log{})
-
 	// Apply time filters
 	var cutoffTime time.Time
 	if lastDuration != "" {
@@ -72,25 +69,24 @@ func runPruneLogsCommand(lastDuration, beforeTime string) error {
 			return fmt.Errorf("invalid duration format: %w", err)
 		}
 		cutoffTime = time.Now().Add(-duration)
-		query = query.Where("timestamp < ?", cutoffTime)
 	} else if beforeTime != "" {
 		before, err := parseTime(beforeTime)
 		if err != nil {
 			return fmt.Errorf("invalid before time format: %w", err)
 		}
 		cutoffTime = before
-		query = query.Where("timestamp < ?", before)
 	}
 
-	// Execute delete
-	result := query.Delete(&store.Log{})
-	if result.Error != nil {
-		return fmt.Errorf("failed to delete logs: %w", result.Error)
+	// Delete in chunks so a running HAL instance is not locked out of the
+	// database for the duration of a large delete
+	deleted, err := store.DeleteInChunks(db.DB, &store.Log{}, "timestamp < ?", cutoffTime)
+	if err != nil {
+		return fmt.Errorf("failed to delete logs: %w", err)
 	}
 
 	// Print summary
 	fmt.Printf("Deleted %d log entries before %s\n",
-		result.RowsAffected,
+		deleted,
 		cutoffTime.Format("2006-01-02 15:04:05"),
 	)
 

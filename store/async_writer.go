@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,10 @@ const (
 	maxBatch = 500
 	// dropReportInterval rate-limits warnings about dropped writes.
 	dropReportInterval = 30 * time.Second
+	// busyRetryMin and busyRetryMax bound the backoff between attempts to commit
+	// a batch while the database is locked by another connection.
+	busyRetryMin = time.Second
+	busyRetryMax = 30 * time.Second
 )
 
 // WriteOperation represents a database write operation to be executed asynchronously.
@@ -96,11 +101,70 @@ func (aw *AsyncWriter) processWrites() {
 			aw.drainQueue()
 			return
 		case op := <-aw.queue:
-			aw.writeBatch(aw.collectBatch(&op))
+			aw.commitBatch(aw.collectBatch(&op))
 		case <-aw.entitySignal:
-			aw.writeBatch(aw.collectBatch(nil))
+			aw.commitBatch(aw.collectBatch(nil))
 		}
 	}
+}
+
+// commitBatch writes a batch, retrying with backoff while the database is
+// locked by another connection. A locked database is a property of the whole
+// database, not of any one operation, so the batch is retried as a unit rather
+// than failing each operation in turn. If the writer is shut down while
+// retrying, one final attempt is made and the batch is dropped if it fails.
+func (aw *AsyncWriter) commitBatch(batch []queuedOp) {
+	defer closeDone(batch)
+
+	delay := busyRetryMin
+	for {
+		err := aw.writeBatch(batch)
+		if err == nil {
+			return
+		}
+
+		if !isBusy(err) {
+			slog.Error("Async database batch commit failed", "error", err, "operations", len(batch))
+			return
+		}
+
+		select {
+		case <-aw.ctx.Done():
+			if err := aw.writeBatch(batch); err != nil {
+				slog.Error("Async database batch commit failed during shutdown, dropping batch",
+					"error", err, "operations", len(batch))
+			}
+
+			return
+		case <-time.After(delay):
+		}
+
+		slog.Warn("Database locked, retrying async write batch", "error", err,
+			"operations", len(batch), "retryIn", delay)
+
+		delay = min(delay*2, busyRetryMax)
+	}
+}
+
+// closeDone signals completion for any operations in batch that are waited on.
+func closeDone(batch []queuedOp) {
+	for _, q := range batch {
+		if q.done != nil {
+			close(q.done)
+		}
+	}
+}
+
+// isBusy reports whether err means the database is locked by another
+// connection (SQLITE_BUSY or SQLITE_LOCKED, including extended codes).
+func isBusy(err error) bool {
+	var coder interface{ Code() int }
+	if !errors.As(err, &coder) {
+		return false
+	}
+
+	code := coder.Code() & 0xff
+	return code == 5 || code == 6 // SQLITE_BUSY, SQLITE_LOCKED
 }
 
 // collectBatch gathers first (if non-nil), any already-queued operations up to
@@ -133,29 +197,28 @@ collect:
 	return batch
 }
 
-// writeBatch commits a batch in one transaction, running each operation exactly
-// once. Each operation runs inside its own savepoint, so a failing operation is
-// rolled back and logged without losing the rest of the batch.
-func (aw *AsyncWriter) writeBatch(batch []queuedOp) {
+// writeBatch commits a batch in one transaction. Each operation runs inside its
+// own savepoint, so an operation that fails on its own (e.g. a constraint
+// violation) is rolled back and logged without losing the rest of the batch.
+// If the database is locked, the whole transaction is rolled back and the error
+// returned so the caller can retry the batch; no operation's effects are
+// committed more than once.
+func (aw *AsyncWriter) writeBatch(batch []queuedOp) error {
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 
-	defer func() {
-		for _, q := range batch {
-			if q.done != nil {
-				close(q.done)
-			}
-		}
-	}()
-
-	err := aw.db.Transaction(func(tx *gorm.DB) error {
+	return aw.db.Transaction(func(tx *gorm.DB) error {
 		for _, q := range batch {
 			if err := tx.Exec("SAVEPOINT async_write").Error; err != nil {
 				return err
 			}
 
 			if err := q.op(tx); err != nil {
+				if isBusy(err) {
+					return err
+				}
+
 				slog.Error("Async database write failed", "error", err)
 				if err := tx.Exec("ROLLBACK TO SAVEPOINT async_write").Error; err != nil {
 					return err
@@ -168,9 +231,6 @@ func (aw *AsyncWriter) writeBatch(batch []queuedOp) {
 		}
 		return nil
 	})
-	if err != nil {
-		slog.Error("Async database batch commit failed", "error", err, "operations", len(batch))
-	}
 }
 
 // drainQueue processes all remaining writes in the queue during shutdown.
@@ -180,7 +240,7 @@ func (aw *AsyncWriter) drainQueue() {
 		if len(batch) == 0 {
 			return
 		}
-		aw.writeBatch(batch)
+		aw.commitBatch(batch)
 	}
 }
 

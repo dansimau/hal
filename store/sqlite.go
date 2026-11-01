@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/dansimau/hal/homeassistant"
@@ -16,13 +17,22 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	// auto_vacuum must be set before the database is created. busy_timeout lets
-	// concurrent writers (the async writer, the rollup loop, and separate CLI
-	// processes) wait for the lock instead of failing with SQLITE_BUSY. Pragmas
-	// are set in the DSN so they apply to every connection in the pool, not just
-	// the one that happens to run an Exec.
-	dsn := path + "?_pragma=auto_vacuum(FULL)&_pragma=busy_timeout(5000)" +
-		"&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	// busy_timeout lets concurrent writers (the async writer, the rollup and
+	// prune loops, and separate CLI processes) wait for the lock instead of
+	// failing with SQLITE_BUSY. Pragmas are set in the DSN so they apply to every
+	// connection in the pool, not just the one that happens to run an Exec.
+	//
+	// auto_vacuum is INCREMENTAL rather than FULL: FULL relocates pages on every
+	// commit that frees them, which made large prunes hold the write lock for
+	// minutes on slow disks. Free pages are reclaimed in bounded steps by
+	// IncrementalVacuum instead. (Switching between FULL and INCREMENTAL is
+	// allowed on an existing database; switching to or from NONE is not.)
+	//
+	// _txlock=immediate makes transactions take the write lock at BEGIN, so a
+	// transaction waits for the lock once up front instead of failing midway
+	// (and, in WAL mode, avoids SQLITE_BUSY_SNAPSHOT on read-to-write upgrades).
+	dsn := path + "?_pragma=auto_vacuum(INCREMENTAL)&_pragma=busy_timeout(5000)" +
+		"&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, err
@@ -54,6 +64,12 @@ func Open(path string) (*Store, error) {
 		DB:          db,
 		asyncWriter: asyncWriter,
 	}, nil
+}
+
+// IncrementalVacuum returns up to pages free pages to the filesystem. Bounding
+// the page count keeps the write transaction short.
+func IncrementalVacuum(db *gorm.DB, pages int) error {
+	return db.Exec(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)).Error
 }
 
 // EnqueueWrite adds a write operation to the async queue. It never blocks; the

@@ -24,6 +24,9 @@ const (
 	// backfillChunk is the raw-data window processed per iteration when catching
 	// up. Chunking bounds memory when rolling up a large historical backlog.
 	backfillChunk = 24 * time.Hour
+	// vacuumPages is the maximum number of free pages returned to the filesystem
+	// after each prune (4MB at the default 4KB page size).
+	vacuumPages = 1000
 )
 
 // Service handles metrics collection, rollup and pruning.
@@ -282,22 +285,31 @@ func pruneOldData(db *gorm.DB, now time.Time) error {
 
 	switch {
 	case ok && watermark >= rawCutoff.Unix():
-		if result := db.Where("timestamp < ?", rawCutoff).Delete(&store.Metric{}); result.Error != nil {
-			logger.Error("Failed to prune old raw metrics", "", "error", result.Error)
-			return result.Error
-		} else if result.RowsAffected > 0 {
-			logger.Info("Pruned old raw metrics", "", "count", result.RowsAffected, "cutoff", rawCutoff)
+		count, err := store.DeleteInChunks(db, &store.Metric{}, "timestamp < ?", rawCutoff)
+		if count > 0 {
+			logger.Info("Pruned old raw metrics", "", "count", count, "cutoff", rawCutoff)
+		}
+		if err != nil {
+			logger.Error("Failed to prune old raw metrics", "", "error", err)
+			return err
 		}
 	default:
 		logger.Info("Deferring raw metric prune until rollups catch up", "", "cutoff", rawCutoff)
 	}
 
 	rollupCutoff := now.Add(-rollupRetention).Unix()
-	if result := db.Where("bucket_start < ?", rollupCutoff).Delete(&store.MetricRollup{}); result.Error != nil {
-		logger.Error("Failed to prune old metric rollups", "", "error", result.Error)
-		return result.Error
-	} else if result.RowsAffected > 0 {
-		logger.Info("Pruned old metric rollups", "", "count", result.RowsAffected, "cutoff", rollupCutoff)
+	count, err := store.DeleteInChunks(db, &store.MetricRollup{}, "bucket_start < ?", rollupCutoff)
+	if count > 0 {
+		logger.Info("Pruned old metric rollups", "", "count", count, "cutoff", rollupCutoff)
+	}
+	if err != nil {
+		logger.Error("Failed to prune old metric rollups", "", "error", err)
+		return err
+	}
+
+	if err := store.IncrementalVacuum(db, vacuumPages); err != nil {
+		logger.Error("Failed to vacuum database", "", "error", err)
+		return err
 	}
 
 	return nil
