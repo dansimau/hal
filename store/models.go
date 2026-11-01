@@ -31,7 +31,7 @@ const (
 type Metric struct {
 	ID             uint       `gorm:"primaryKey;autoIncrement"`
 	MetricType     MetricType `gorm:"index:idx_metric_type_timestamp,priority:1;not null;size:50"`
-	Timestamp      time.Time  `gorm:"index:idx_metric_type_timestamp,priority:2;not null"`
+	Timestamp      time.Time  `gorm:"index:idx_metric_type_timestamp,priority:2;index:idx_metric_timestamp;not null"`
 	Value          int64      `gorm:"not null"` // For counters: 1, for timers: nanoseconds
 	EntityID       string     `gorm:"size:100"` // Optional: which entity triggered this
 	AutomationName string     `gorm:"size:100"` // Optional: which automation was involved
@@ -46,7 +46,7 @@ type MetricRollup struct {
 	// BucketStart is the Unix timestamp (seconds) of the start of the one-minute
 	// bucket. Using an integer minute boundary makes bucketing identical whether
 	// computed in Go or in SQL, so upserts conflict-match reliably.
-	BucketStart int64 `gorm:"uniqueIndex:idx_rollup_type_bucket,priority:2;not null"`
+	BucketStart int64 `gorm:"uniqueIndex:idx_rollup_type_bucket,priority:2;index:idx_rollup_bucket_start;not null"`
 	Count       int64 `gorm:"not null"` // number of raw samples in the bucket
 	Sum         int64 `gorm:"not null"` // sum of raw values in the bucket
 	// Histogram is a log-scale histogram of the raw values in the bucket, keyed by

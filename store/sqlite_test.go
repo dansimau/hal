@@ -49,7 +49,7 @@ func TestSQLitePragmaConfiguration(t *testing.T) {
 		t.Fatalf("Failed to query auto_vacuum: %v", err)
 	}
 
-	if autoVacuum != "1" { // FULL = 1
-		t.Errorf("Expected auto_vacuum to be '1' (FULL), got: %s", autoVacuum)
+	if autoVacuum != "2" { // INCREMENTAL = 2
+		t.Errorf("Expected auto_vacuum to be '2' (INCREMENTAL), got: %s", autoVacuum)
 	}
 }

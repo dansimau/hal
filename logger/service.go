@@ -521,16 +521,17 @@ func (s *Service) pruneLogs(stopChan <-chan struct{}) {
 			s.mu.RUnlock()
 
 			if db != nil {
+				// Prune directly in small chunks rather than via the async writer:
+				// a large DELETE inside a writer batch would hold the write lock
+				// (and stall every other queued write) until it finished.
 				cutoffTime := time.Now().Add(-s.retentionTime)
-				db.EnqueueWrite(func(gdb *gorm.DB) error {
-					result := gdb.Where("timestamp < ?", cutoffTime).Delete(&store.Log{})
-					if result.Error != nil {
-						slog.Error("Failed to prune old logs", "error", result.Error)
-					} else if result.RowsAffected > 0 {
-						slog.Info("Pruned old logs", "count", result.RowsAffected, "cutoff", cutoffTime)
-					}
-					return result.Error
-				})
+				count, err := store.DeleteInChunks(db.DB, &store.Log{}, "timestamp < ?", cutoffTime)
+				if count > 0 {
+					slog.Info("Pruned old logs", "count", count, "cutoff", cutoffTime)
+				}
+				if err != nil {
+					slog.Error("Failed to prune old logs", "error", err)
+				}
 			}
 		}
 	}
