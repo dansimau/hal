@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/dansimau/hal/homeassistant"
 
@@ -14,9 +15,23 @@ import (
 type Store struct {
 	*gorm.DB
 	asyncWriter *AsyncWriter
+	untrack     func() // forgets the database file as open in this process
 }
 
+// openMu serialises opening databases, so the copy-on-write check for one Open
+// never opens (and closes) a database file while another Open is having SQLite
+// open the same file. See openFiles.
+var openMu sync.Mutex
+
 func Open(path string) (*Store, error) {
+	openMu.Lock()
+	defer openMu.Unlock()
+
+	file, isFile := sqliteFilePath(path)
+	if isFile {
+		prepareDatabaseFile(file)
+	}
+
 	// busy_timeout lets concurrent writers (the async writer, the rollup and
 	// prune loops, and separate CLI processes) wait for the lock instead of
 	// failing with SQLITE_BUSY. Pragmas are set in the DSN so they apply to every
@@ -38,6 +53,23 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
+	untrack := func() {}
+	if isFile {
+		untrack = trackOpen(file)
+	}
+
+	// fail closes the database before forgetting it as open in this process:
+	// while SQLite has the file open, the copy-on-write check must not run on it.
+	fail := func(err error) (*Store, error) {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+
+		untrack()
+
+		return nil, err
+	}
+
 	// In-memory SQLite databases are scoped to a single connection: every new
 	// connection in the pool gets its own empty database, so a migration run on
 	// one connection is invisible to a query that lands on another ("no such
@@ -46,14 +78,14 @@ func Open(path string) (*Store, error) {
 	if strings.Contains(path, ":memory:") {
 		sqlDB, err := db.DB()
 		if err != nil {
-			return nil, err
+			return fail(err)
 		}
 
 		sqlDB.SetMaxOpenConns(1)
 	}
 
 	if err := db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{}); err != nil {
-		return nil, err
+		return fail(err)
 	}
 
 	// Create and start async writer
@@ -63,6 +95,7 @@ func Open(path string) (*Store, error) {
 	return &Store{
 		DB:          db,
 		asyncWriter: asyncWriter,
+		untrack:     untrack,
 	}, nil
 }
 
@@ -100,5 +133,11 @@ func (s *Store) Close() error {
 	if err != nil {
 		return err
 	}
-	return sqlDB.Close()
+
+	err = sqlDB.Close()
+	if s.untrack != nil {
+		s.untrack()
+	}
+
+	return err
 }
