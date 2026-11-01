@@ -128,3 +128,38 @@ func TestOpenSwitchesFullAutoVacuumToIncremental(t *testing.T) {
 	assert.Equal(t, autoVacuum, 2) // INCREMENTAL
 	assert.NilError(t, store.IncrementalVacuum(db.DB, 10))
 }
+
+// TestIncrementalVacuumReclaimsPages verifies that IncrementalVacuum returns
+// exactly the requested number of free pages to the filesystem (not just one,
+// which is all a plain Exec of the pragma frees), and stops when none are left.
+func TestIncrementalVacuumReclaimsPages(t *testing.T) {
+	t.Parallel()
+
+	db, err := store.Open(t.TempDir() + "/vacuum.db")
+	assert.NilError(t, err)
+	defer db.Close()
+
+	for _, stmt := range []string{
+		"CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)",
+		"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 2000) " +
+			"INSERT INTO t (v) SELECT '" + strings.Repeat("x", 1000) + "' FROM n",
+		"DELETE FROM t",
+	} {
+		assert.NilError(t, db.Exec(stmt).Error)
+	}
+
+	freePages := func() int {
+		var n int
+		assert.NilError(t, db.Raw("PRAGMA freelist_count").Scan(&n).Error)
+		return n
+	}
+
+	before := freePages()
+	assert.Assert(t, before >= 100, "expected the delete to free pages, got %d", before)
+
+	assert.NilError(t, store.IncrementalVacuum(db.DB, 50))
+	assert.Equal(t, freePages(), before-50)
+
+	assert.NilError(t, store.IncrementalVacuum(db.DB, before))
+	assert.Equal(t, freePages(), 0)
+}
