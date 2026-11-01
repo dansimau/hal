@@ -2,7 +2,9 @@ package store
 
 import (
 	"log/slog"
+	"net/url"
 	"path/filepath"
+	"strings"
 )
 
 // Inode flags from linux/fs.h, as read by FS_IOC_GETFLAGS (lsattr).
@@ -66,4 +68,41 @@ func warnCopyOnWrite(path string) {
 		slog.Warn("SQLite database is on copy-on-write storage, which makes it slow and fragmented; "+cowFixHint,
 			"path", path, "problem", problem)
 	}
+}
+
+// sqliteFilePath returns the filesystem path SQLite opens for the data source
+// name, or false for in-memory and temporary databases. It mirrors the driver:
+// a query string ("?...") is not part of the filename, and "file:" URIs are
+// decoded, including file:///absolute/path and percent-escapes.
+func sqliteFilePath(name string) (string, bool) {
+	if !strings.HasPrefix(name, "file:") {
+		path, _, _ := strings.Cut(name, "?")
+		if path == "" || path == ":memory:" {
+			return "", false
+		}
+
+		return path, true
+	}
+
+	u, err := url.Parse(name)
+	if err != nil || u.Query().Get("mode") == "memory" {
+		return "", false
+	}
+
+	if u.Host != "" && u.Host != "localhost" {
+		return "", false // SQLite rejects URIs with any other authority
+	}
+
+	path := u.Path
+	if u.Opaque != "" {
+		if path, err = url.PathUnescape(u.Opaque); err != nil {
+			return "", false
+		}
+	}
+
+	if path == "" || path == ":memory:" {
+		return "", false
+	}
+
+	return path, true
 }

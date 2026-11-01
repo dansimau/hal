@@ -10,3 +10,6 @@ func prepareDatabaseFile(string) {}
 func readCOWState(string, string) (cowState, bool) {
 	return cowState{}, false
 }
+
+// trackOpen is a no-op outside Linux.
+func trackOpen(string) func() { return func() {} }
