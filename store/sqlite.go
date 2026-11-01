@@ -17,6 +17,10 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
+	if !strings.Contains(path, ":memory:") {
+		prepareDatabaseFile(path)
+	}
+
 	// busy_timeout lets concurrent writers (the async writer, the rollup and
 	// prune loops, and separate CLI processes) wait for the lock instead of
 	// failing with SQLITE_BUSY. Pragmas are set in the DSN so they apply to every
