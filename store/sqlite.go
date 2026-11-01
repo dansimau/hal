@@ -101,8 +101,20 @@ func Open(path string) (*Store, error) {
 
 // IncrementalVacuum returns up to pages free pages to the filesystem. Bounding
 // the page count keeps the write transaction short.
+//
+// The pragma frees one page per step of the statement, so it must be read to
+// completion: Exec only takes the first step and would free a single page.
 func IncrementalVacuum(db *gorm.DB, pages int) error {
-	return db.Exec(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)).Error
+	rows, err := db.Raw(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)).Rows()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+	}
+
+	return rows.Err()
 }
 
 // EnqueueWrite adds a write operation to the async queue. It never blocks; the
