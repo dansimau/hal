@@ -127,13 +127,10 @@ func (aw *AsyncWriter) Start() {
 	}
 
 	aw.started = true
-	aw.wg.Add(1)
 
-	go func() {
-		defer aw.wg.Done()
-
+	aw.wg.Go(func() {
 		aw.processWrites()
-	}()
+	})
 }
 
 // Enqueue adds a write operation to the queue for asynchronous execution. It

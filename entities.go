@@ -101,7 +101,7 @@ func findEntities(v any) []EntityInterface {
 
 		// Check if field implements EntityLike interface
 		if field.Kind() == reflect.Pointer && !field.IsNil() {
-			if entity, ok := field.Interface().(EntityInterface); ok {
+			if entity, ok := reflect.TypeAssert[EntityInterface](field); ok {
 				entities = append(entities, entity)
 
 				continue

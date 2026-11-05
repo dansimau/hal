@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bytes"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -37,14 +36,7 @@ func seedDBInDir(t *testing.T, dir string, seed func(db *store.Store)) {
 // previous working directory on cleanup.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
-
-	orig, err := os.Getwd()
-	assert.NilError(t, err)
-
-	assert.NilError(t, os.Chdir(dir))
-	t.Cleanup(func() {
-		assert.NilError(t, os.Chdir(orig))
-	})
+	t.Chdir(dir)
 }
 
 func TestNewEntitiesCmd(t *testing.T) {

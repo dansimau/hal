@@ -213,16 +213,12 @@ func TestConcurrentServiceCallsDuringReconnection(t *testing.T) {
 	errChan := make(chan error, 10)
 
 	for range 10 {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			err := testEntity.TurnOn()
 			if err != nil {
 				errChan <- err
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

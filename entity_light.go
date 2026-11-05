@@ -3,6 +3,7 @@ package hal
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 
 	"github.com/dansimau/hal/hassws"
@@ -56,9 +57,7 @@ func (l *Light) TurnOn(attributes ...map[string]any) error {
 	}
 
 	for _, attribute := range attributes {
-		for k, v := range attribute {
-			data[k] = v
-		}
+		maps.Copy(data, attribute)
 	}
 
 	_, err := l.connection.CallService(hassws.CallServiceRequest{
@@ -91,9 +90,7 @@ func (l *Light) TurnOnContext(ctx context.Context, attributes ...map[string]any)
 	}
 
 	for _, attribute := range attributes {
-		for k, v := range attribute {
-			data[k] = v
-		}
+		maps.Copy(data, attribute)
 	}
 
 	_, err := l.connection.CallService(hassws.CallServiceRequest{ //nolint:contextcheck // no context-aware CallService

@@ -54,26 +54,17 @@ func TestSearchParentsForFile(t *testing.T) {
 	})
 }
 
-//nolint:paralleltest // This test changes working directory and cannot run in parallel
 func TestSearchParentsForFileFromCwd(t *testing.T) {
 	t.Run("searches from current working directory", func(t *testing.T) {
 		tmpDir := t.TempDir()
 
-		originalDir, err := os.Getwd()
-		assert.NilError(t, err)
-
-		defer func() {
-			assert.NilError(t, os.Chdir(originalDir))
-		}()
-
 		testFile := testFilename
 		testPath := filepath.Join(tmpDir, testFile)
 
-		err = os.WriteFile(testPath, []byte("test"), 0o600)
+		err := os.WriteFile(testPath, []byte("test"), 0o600)
 		assert.NilError(t, err)
 
-		err = os.Chdir(tmpDir)
-		assert.NilError(t, err)
+		t.Chdir(tmpDir)
 
 		foundPath, err := searchParentsForFileFromCwd(testFile)
 		assert.NilError(t, err)

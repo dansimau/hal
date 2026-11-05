@@ -6,12 +6,16 @@ linters:
     - cyclop
     - depguard
     - exhaustruct
+    - exhaustruct_v5
     - funlen
     - gochecknoinits
     - gocognit
     - godox
     - nonamedreturns
     - wrapcheck
+    # Superseded by wsl_v5 and gomodguard_v2, which `default: all` enables.
+    - wsl
+    - gomodguard
   settings:
     exhaustive:
       default-signifies-exhaustive: true

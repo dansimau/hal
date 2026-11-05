@@ -1,6 +1,8 @@
 package hal
 
 import (
+	"maps"
+
 	"github.com/dansimau/hal/hassws"
 	"github.com/dansimau/hal/logger"
 )
@@ -37,9 +39,7 @@ func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 	}
 
 	for _, attribute := range attributes {
-		for k, v := range attribute {
-			data[k] = v
-		}
+		maps.Copy(data, attribute)
 	}
 
 	_, err := s.connection.CallService(hassws.CallServiceRequest{
