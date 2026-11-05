@@ -1,9 +1,11 @@
 SHELL := /bin/bash
 
+# golangci-lint is a Go tool pinned in golangci-lint.mod. It lives in its own
+# modfile so its (many) dependencies and Go version requirement do not leak
+# into the module's go.mod.
 .PHONY: lint
 lint:
-	which golangci-lint || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin v1.62.2
-	golangci-lint run
+	go tool -modfile=golangci-lint.mod golangci-lint run
 
 .PHONY: test
 test:

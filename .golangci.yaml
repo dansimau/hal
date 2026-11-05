@@ -1,32 +1,45 @@
+version: "2"
 linters:
-  enable-all: true
+  default: all
   disable:
     - bodyclose
+    - cyclop
     - depguard
     - exhaustruct
-    - exportloopref
-    - gochecknoinits
-    - nonamedreturns
-    - wrapcheck
-    # Temporarily disabling while I figure out why severity settings are not working
-    - cyclop
     - funlen
+    - gochecknoinits
     - gocognit
     - godox
-
-linters-settings:
-  exhaustive:
-    default-signifies-exhaustive: true
-  tagliatelle:
-    case:
-      rules:
-        json: snake
-  varnamelen:
-    max-distance: 12
-    min-name-length: 2
-
+    - nonamedreturns
+    - wrapcheck
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+    varnamelen:
+      max-distance: 12
+      min-name-length: 2
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: (.+)\.go$
+        text: block should not end with a whitespace
+      - path: (.+)\.go$
+        text: usage of time.Local
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 severity:
-  default-severity: info
+  default: info
   rules:
     - linters:
         - funlen
@@ -34,8 +47,15 @@ severity:
         - godox
         - nestif
       severity: info
-
-issues:
-  exclude:
-    - "block should not end with a whitespace"
-    - "usage of time.Local"
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

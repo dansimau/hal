@@ -207,5 +207,5 @@ It reads the same `hal.yaml`/SQLite database and provides:
 
 ```sh
 make test   # run tests with coverage
-make lint   # run golangci-lint (installs it if missing)
+make lint   # run golangci-lint (a go tool pinned in golangci-lint.mod)
 ```

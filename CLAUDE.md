@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Common Development Commands
 
 - **Build and Test**: `make test` - Runs tests with coverage reporting
-- **Lint**: `make lint` - Runs golangci-lint (installs if missing)
+- **Lint**: `make lint` - Runs golangci-lint via `go tool` (pinned in `golangci-lint.mod`, a separate modfile so its dependencies stay out of `go.mod`)
 - **Run Tests**: `go test -v ./...` - Run all tests with verbose output
 - **Run Single Test**: `go test -v ./[package] -run TestFunctionName`
 - **Coverage**: Tests automatically generate coverage report in `cover.out`

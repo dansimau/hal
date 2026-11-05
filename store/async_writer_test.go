@@ -105,6 +105,7 @@ func countLogs(t *testing.T, db *store.Store) int64 {
 	t.Helper()
 
 	var count int64
+
 	assert.NilError(t, db.Model(&store.Log{}).Count(&count).Error)
 
 	return count
@@ -142,7 +143,8 @@ func TestWritesAreHeldUntilFlushInterval(t *testing.T) {
 	enqueueLog(db, "first")
 	time.Sleep(100 * time.Millisecond)
 	enqueueLog(db, "second")
-	for _, state := range []string{"on", "off"} {
+
+	for _, state := range []string{"on", "unavailable"} {
 		db.EnqueueEntityState("light.kitchen", &homeassistant.State{EntityID: "light.kitchen", State: state})
 	}
 
@@ -151,8 +153,9 @@ func TestWritesAreHeldUntilFlushInterval(t *testing.T) {
 	waitForLogs(t, db, 2)
 
 	var entity store.Entity
+
 	assert.NilError(t, db.First(&entity, "id = ?", "light.kitchen").Error)
-	assert.Equal(t, entity.State.State, "off")
+	assert.Equal(t, entity.State.State, "unavailable")
 }
 
 // TestWaitForWritesDoesNotWaitForFlushInterval verifies that a caller waiting on
@@ -166,6 +169,7 @@ func TestWaitForWritesDoesNotWaitForFlushInterval(t *testing.T) {
 	enqueueLog(db, "waited")
 
 	start := time.Now()
+
 	db.WaitForWrites()
 	assert.Assert(t, time.Since(start) < 5*time.Second, "WaitForWrites waited for the flush interval")
 	assert.Equal(t, countLogs(t, db), int64(1))
@@ -180,7 +184,7 @@ func TestFullBatchIsCommittedBeforeFlushInterval(t *testing.T) {
 	db.SetFlushInterval(time.Hour)
 
 	const maxBatch = 500
-	for i := 0; i < maxBatch+100; i++ {
+	for i := range maxBatch + 100 {
 		enqueueLog(db, fmt.Sprintf("log %d", i))
 	}
 
@@ -207,16 +211,19 @@ func TestCloseDoesNotWaitForFlushInterval(t *testing.T) {
 	db.EnqueueEntityState("light.hall", &homeassistant.State{EntityID: "light.hall", State: "on"})
 
 	start := time.Now()
+
 	assert.NilError(t, db.Close())
 	assert.Assert(t, time.Since(start) < 5*time.Second, "Close waited for the flush interval")
 
 	reopened, err := store.Open(path)
 	assert.NilError(t, err)
+
 	defer reopened.Close()
 
 	assert.Equal(t, countLogs(t, reopened), int64(1))
 
 	var entity store.Entity
+
 	assert.NilError(t, reopened.First(&entity, "id = ?", "light.hall").Error)
 	assert.Equal(t, entity.State.State, "on")
 }
