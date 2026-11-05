@@ -31,7 +31,7 @@ func TestLightSensor_Level(t *testing.T) {
 		t.Parallel()
 
 		sensor := hal.NewLightSensor("sensor.light_level")
-		sensor.SetState(homeassistant.State{State: "unavailable"})
+		sensor.SetState(homeassistant.State{State: stateUnavailable})
 
 		assert.Equal(t, sensor.Level(), 0)
 	})

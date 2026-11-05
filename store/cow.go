@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// memoryDatabase is the SQLite data source name for an in-memory database.
+const memoryDatabase = ":memory:"
+
 // Inode flags from linux/fs.h, as read by FS_IOC_GETFLAGS (lsattr).
 const (
 	fsComprFlag = 0x00000004 // FS_COMPR_FL: compressed ("c" in lsattr)
@@ -27,8 +30,8 @@ type cowState struct {
 	dirFlags  uint32 // inode flags of the directory containing it
 }
 
-// cowProblems returns a description of each way the storage described by s is
-// unsuitable for SQLite. Copy-on-write filesystems relocate every rewritten
+// cowProblems returns a description of each way the storage described by state
+// is unsuitable for SQLite. Copy-on-write filesystems relocate every rewritten
 // block, so SQLite's small in-place page writes fragment the file badly, which
 // makes reads very slow on spinning disks. Compression makes it worse: each 4KB
 // page write rewrites a whole compressed extent (up to 128KB).
@@ -37,23 +40,39 @@ type cowState struct {
 // devices. The directory matters as well as the file because SQLite creates
 // its -wal and -journal files afresh, and new files inherit the directory's
 // flags.
-func cowProblems(s cowState) []string {
-	if !s.btrfs {
+func cowProblems(state cowState) []string {
+	if !state.btrfs {
 		return nil
 	}
 
 	var problems []string
-	if s.fileFlags&fsNoCOWFlag == 0 {
+	if state.fileFlags&fsNoCOWFlag == 0 {
 		problems = append(problems, "database file uses copy-on-write")
 	}
-	if s.fileFlags&fsComprFlag != 0 {
+
+	if state.fileFlags&fsComprFlag != 0 {
 		problems = append(problems, "database file is compressed")
 	}
-	if s.dirFlags&fsNoCOWFlag == 0 {
+
+	if state.dirFlags&fsNoCOWFlag == 0 {
 		problems = append(problems, "database directory uses copy-on-write, so new -wal/-journal files will too")
 	}
 
 	return problems
+}
+
+// prepareDatabaseFile creates the database file at path with copy-on-write
+// disabled if it does not exist yet (see createNoCOWFile), then warns if the
+// database is on copy-on-write storage. Failures are logged, never returned:
+// they only affect performance. Callers must serialise this with opening the
+// database (see openMu) so the database file is never opened and closed here
+// while SQLite has it open.
+func prepareDatabaseFile(path string) {
+	if !createNoCOWFile(path) {
+		return
+	}
+
+	warnCopyOnWrite(path)
 }
 
 // warnCopyOnWrite logs a warning if the database at path is on copy-on-write
@@ -77,7 +96,7 @@ func warnCopyOnWrite(path string) {
 func sqliteFilePath(name string) (string, bool) {
 	if !strings.HasPrefix(name, "file:") {
 		path, _, _ := strings.Cut(name, "?")
-		if path == "" || path == ":memory:" {
+		if path == "" || path == memoryDatabase {
 			return "", false
 		}
 
@@ -94,13 +113,15 @@ func sqliteFilePath(name string) (string, bool) {
 	}
 
 	path := u.Path
+
 	if u.Opaque != "" {
-		if path, err = url.PathUnescape(u.Opaque); err != nil {
+		path, err = url.PathUnescape(u.Opaque)
+		if err != nil {
 			return "", false
 		}
 	}
 
-	if path == "" || path == ":memory:" {
+	if path == "" || path == memoryDatabase {
 		return "", false
 	}
 

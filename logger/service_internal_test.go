@@ -8,7 +8,12 @@ import (
 	"github.com/dansimau/hal/store"
 )
 
+// testEntityKitchen is the entity ID used across the logger tests.
+const testEntityKitchen = "light.kitchen"
+
 func TestLoggingService(t *testing.T) {
+	t.Parallel()
+
 	// Create temporary database
 	// Open database
 	db, err := store.Open(":memory:")
@@ -21,10 +26,10 @@ func TestLoggingService(t *testing.T) {
 	service.SetLevel(slog.LevelDebug) // Set to Debug level to capture all logs
 
 	// Test logging with entity ID
-	entityID := "light.kitchen"
+	entityID := testEntityKitchen
 	service.Info("Light turned on", entityID)
 	service.Error("Failed to turn off light", entityID)
-	
+
 	// Test logging without entity ID
 	service.Info("System started", "")
 	service.Debug("Debug message", "")
@@ -34,7 +39,9 @@ func TestLoggingService(t *testing.T) {
 
 	// Verify logs were written to database
 	var logs []store.Log
-	if err := db.Find(&logs).Error; err != nil {
+
+	err = db.Find(&logs).Error
+	if err != nil {
 		t.Fatalf("Failed to query logs: %v", err)
 	}
 
@@ -46,7 +53,8 @@ func TestLoggingService(t *testing.T) {
 	if logs[0].LogText != "Light turned on entity_id=light.kitchen" {
 		t.Errorf("Expected log text 'Light turned on entity_id=light.kitchen', got '%s'", logs[0].LogText)
 	}
-	if logs[0].EntityID != "light.kitchen" {
+
+	if logs[0].EntityID != testEntityKitchen {
 		t.Errorf("Expected entity ID 'light.kitchen', got '%s'", logs[0].EntityID)
 	}
 
@@ -54,12 +62,15 @@ func TestLoggingService(t *testing.T) {
 	if logs[2].LogText != "System started" {
 		t.Errorf("Expected log text 'System started', got '%s'", logs[2].LogText)
 	}
+
 	if logs[2].EntityID != "" {
 		t.Errorf("Expected entity ID to be empty, got '%s'", logs[2].EntityID)
 	}
 }
 
 func TestLogPruning(t *testing.T) {
+	t.Parallel()
+
 	// Create temporary database
 	// Open database
 	db, err := store.Open(":memory:")
@@ -73,10 +84,10 @@ func TestLogPruning(t *testing.T) {
 
 	// Add some logs
 	service.Info("Old log", "")
-	
+
 	// Wait for retention period to pass
 	time.Sleep(2 * time.Second)
-	
+
 	// Add a new log
 	service.Info("New log", "")
 
@@ -85,6 +96,7 @@ func TestLogPruning(t *testing.T) {
 
 	// Manually trigger pruning
 	cutoffTime := time.Now().Add(-service.retentionTime)
+
 	result := db.Where("timestamp < ?", cutoffTime).Delete(&store.Log{})
 	if result.Error != nil {
 		t.Fatalf("Failed to prune logs: %v", result.Error)
@@ -92,7 +104,9 @@ func TestLogPruning(t *testing.T) {
 
 	// Verify that only the new log remains
 	var logs []store.Log
-	if err := db.Find(&logs).Error; err != nil {
+
+	err = db.Find(&logs).Error
+	if err != nil {
 		t.Fatalf("Failed to query logs: %v", err)
 	}
 

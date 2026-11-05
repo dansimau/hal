@@ -35,9 +35,14 @@ const (
 	// (or any other write) indefinitely while holding writeMutex, preventing
 	// reconnection and shutdown.
 	writeTimeout = 10 * time.Second
+
+	// readTimeoutPingMultiplier is how many ping intervals a quiet connection
+	// may stay silent before the read deadline expires. Two gives a pong at
+	// least one full interval to arrive before the connection is deemed stale.
+	readTimeoutPingMultiplier = 2
 )
 
-// Connection states
+// Connection states.
 type connectionState int
 
 const (
@@ -99,16 +104,17 @@ func NewClient(config ClientConfig) *Client {
 	// larger than the default read timeout does not cause continuous
 	// reconnects on quiet connections.
 	if config.ReadTimeout == 0 {
-		config.ReadTimeout = 2 * config.PingInterval
+		config.ReadTimeout = readTimeoutPingMultiplier * config.PingInterval
 	}
 
 	// Guard against a misconfiguration where the read deadline would expire
 	// before a heartbeat pong could arrive.
 	if config.ReadTimeout <= config.PingInterval {
 		logger.Warn("ReadTimeout must be larger than PingInterval; adjusting", "",
-			"pingInterval", config.PingInterval, "readTimeout", config.ReadTimeout, "adjustedTo", 2*config.PingInterval)
+			"pingInterval", config.PingInterval, "readTimeout", config.ReadTimeout,
+			"adjustedTo", readTimeoutPingMultiplier*config.PingInterval)
 
-		config.ReadTimeout = 2 * config.PingInterval
+		config.ReadTimeout = readTimeoutPingMultiplier * config.PingInterval
 	}
 
 	c := &Client{
@@ -116,64 +122,13 @@ func NewClient(config ClientConfig) *Client {
 		responses: make(map[int]chan []byte),
 	}
 	c.setState(stateDisconnected)
+
 	return c
 }
 
-// getState returns the current connection state
-func (c *Client) getState() connectionState {
-	v := c.state.Load()
-	if v == nil {
-		return stateDisconnected
-	}
-	return v.(connectionState)
-}
-
-// setState updates the connection state
-func (c *Client) setState(s connectionState) {
-	c.state.Store(s)
-}
-
-// SetOnDisconnected sets the callback to be called when the connection is lost
+// SetOnDisconnected sets the callback to be called when the connection is lost.
 func (c *Client) SetOnDisconnected(fn func()) {
 	c.onDisconnected = fn
-}
-
-func (c *Client) authenticate() error {
-	// Read auth_required message from server
-	var authRequired AuthChallenge
-	if err := c.read(&authRequired); err != nil {
-		return err
-	}
-
-	logger.Debug("Authenticating", "")
-
-	// Send auth message with access token
-	if err := c.send(AuthRequest{
-		Type:        "auth",
-		AccessToken: c.cfg.Token,
-	}); err != nil {
-		return err
-	}
-
-	// Read auth_ok or auth_invalid response
-	var authResponse AuthResponse
-	if err := c.read(&authResponse); err != nil {
-		return err
-	}
-
-	logger.Debug("Received auth response", "", "msg", authResponse)
-
-	if authResponse.Type == "auth_invalid" {
-		return fmt.Errorf("%w: %s", ErrAuthInvalid, authResponse.Message)
-	}
-
-	if authResponse.Type != "auth_ok" {
-		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, authResponse.Message)
-	}
-
-	logger.Debug("Authenticated", "")
-
-	return nil
 }
 
 func (c *Client) Close() error {
@@ -185,17 +140,11 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	return c.writeMessage(c.conn, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"))
-}
-
-func (c *Client) shutdown() error {
-	c.setState(stateDisconnected)
-
-	if c.conn == nil {
-		return nil
-	}
-
-	return c.conn.Close()
+	return c.writeMessage(
+		c.conn,
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"),
+	)
 }
 
 func (c *Client) Connect() error {
@@ -206,6 +155,7 @@ func (c *Client) Connect() error {
 	conn, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://%s/api/websocket", c.cfg.Host), nil)
 	if err != nil {
 		c.setState(stateDisconnected)
+
 		return err
 	}
 
@@ -213,8 +163,10 @@ func (c *Client) Connect() error {
 
 	c.conn = conn
 
-	if err := c.authenticate(); err != nil {
+	err = c.authenticate()
+	if err != nil {
 		c.setState(stateDisconnected)
+
 		return err
 	}
 
@@ -233,6 +185,259 @@ func (c *Client) Connect() error {
 	return nil
 }
 
+// SubscribeEvents subscribes to home assistant events.
+func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) error {
+	msg := subscribeEventsRequest{
+		ID:        c.nextMsgID(),
+		Type:      MessageTypeSubscribeEvents,
+		EventType: eventType,
+	}
+
+	reqBytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	responseChan, err := c.sendMessageStreamResponses(reqBytes)
+	if err != nil {
+		return err
+	}
+
+	// First message contains the initial response about the subscription
+	resBytes, err := c.readMessageFromChannel(responseChan)
+	if err != nil {
+		close(responseChan)
+
+		return err
+	}
+
+	var res subscribeEventsResponse
+
+	err = json.Unmarshal(resBytes, &res)
+	if err != nil {
+		close(responseChan)
+
+		return err
+	}
+
+	if !res.Success {
+		close(responseChan)
+
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
+	}
+
+	// Consume events in order. A single consumer over a FIFO channel preserves
+	// the order Home Assistant sent them.
+	go func(ch chan []byte) {
+		for b := range ch {
+			var msg EventMessage
+
+			err := json.Unmarshal(b, &msg)
+			if err != nil {
+				logger.Error("Error unmarshalling event message", "", "error", err)
+
+				continue
+			}
+
+			handler(msg)
+		}
+	}(responseChan)
+
+	logger.Info("Listening for state changes", "")
+
+	return nil
+}
+
+// SubscribeEventsRaw subscribes to home assistant events and passes the raw
+// JSON frame bytes to the handler instead of a parsed EventMessage. Useful
+// when callers need the unmodified payload (e.g. to display unknown fields).
+func (c *Client) SubscribeEventsRaw(eventType string, handler func([]byte)) error {
+	msg := subscribeEventsRequest{
+		ID:        c.nextMsgID(),
+		Type:      MessageTypeSubscribeEvents,
+		EventType: eventType,
+	}
+
+	reqBytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	responseChan, err := c.sendMessageStreamResponses(reqBytes)
+	if err != nil {
+		return err
+	}
+
+	resBytes, err := c.readMessageFromChannel(responseChan)
+	if err != nil {
+		close(responseChan)
+
+		return err
+	}
+
+	var res subscribeEventsResponse
+
+	err = json.Unmarshal(resBytes, &res)
+	if err != nil {
+		close(responseChan)
+
+		return err
+	}
+
+	if !res.Success {
+		close(responseChan)
+
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
+	}
+
+	// Consume events in order (single consumer over a FIFO channel).
+	go func(ch chan []byte) {
+		for b := range ch {
+			handler(b)
+		}
+	}(responseChan)
+
+	return nil
+}
+
+func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error) {
+	if c.getState() != stateConnected {
+		return CallServiceResponse{}, ErrNotConnected
+	}
+
+	reqBytes, err := json.Marshal(msg)
+	if err != nil {
+		return CallServiceResponse{}, err
+	}
+
+	resBytes, err := c.sendMessageWaitResponse(reqBytes)
+	if err != nil {
+		return CallServiceResponse{}, err
+	}
+
+	var resp CallServiceResponse
+
+	err = json.Unmarshal(resBytes, &resp)
+	if err != nil {
+		return CallServiceResponse{}, err
+	}
+
+	if resp.Type == MessageTypeResult && !resp.Success {
+		logger.Error("Call service failed", "", "err", resp.Error)
+	}
+
+	return resp, nil
+}
+
+func (c *Client) GetStates() ([]homeassistant.State, error) {
+	if c.getState() != stateConnected {
+		return nil, ErrNotConnected
+	}
+
+	msg := CommandMessage{
+		ID:   c.nextMsgID(),
+		Type: MessageTypeGetStates,
+	}
+
+	reqBytes, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	resBytes, err := c.sendMessageWaitResponse(reqBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp CommandResponse
+
+	err = json.Unmarshal(resBytes, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.Success {
+		return nil, fmt.Errorf("%w: %s", ErrUnexpectedResponse, resp.Error)
+	}
+
+	var states []homeassistant.State
+
+	err = json.Unmarshal(resp.Result, &states)
+	if err != nil {
+		return nil, err
+	}
+
+	return states, nil
+}
+
+// getState returns the current connection state.
+func (c *Client) getState() connectionState {
+	state, ok := c.state.Load().(connectionState)
+	if !ok {
+		return stateDisconnected
+	}
+
+	return state
+}
+
+// setState updates the connection state.
+func (c *Client) setState(s connectionState) {
+	c.state.Store(s)
+}
+
+func (c *Client) authenticate() error {
+	// Read auth_required message from server
+	var authRequired AuthChallenge
+
+	err := c.read(&authRequired)
+	if err != nil {
+		return err
+	}
+
+	logger.Debug("Authenticating", "")
+
+	// Send auth message with access token
+	err = c.send(AuthRequest{
+		Type:        "auth",
+		AccessToken: c.cfg.Token,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Read auth_ok or auth_invalid response
+	var authResponse AuthResponse
+
+	err = c.read(&authResponse)
+	if err != nil {
+		return err
+	}
+
+	logger.Debug("Received auth response", "", "msg", authResponse)
+
+	if authResponse.Type == "auth_invalid" {
+		return fmt.Errorf("%w: %s", ErrAuthInvalid, authResponse.Message)
+	}
+
+	if authResponse.Type != "auth_ok" {
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, authResponse.Message)
+	}
+
+	logger.Debug("Authenticated", "")
+
+	return nil
+}
+
+func (c *Client) shutdown() error {
+	c.setState(stateDisconnected)
+
+	if c.conn == nil {
+		return nil
+	}
+
+	return c.conn.Close()
+}
+
 // heartbeat periodically sends a ping to Home Assistant to keep the connection
 // active and generate traffic during quiet periods. The pong response resets
 // the read deadline in listen(). If a ping fails to send, the connection is
@@ -246,7 +451,8 @@ func (c *Client) heartbeat(conn *websocket.Conn, done chan struct{}) {
 		case <-done:
 			return
 		case <-ticker.C:
-			if err := c.ping(conn); err != nil {
+			err := c.ping(conn)
+			if err != nil {
 				logger.Error("Heartbeat ping failed, closing connection", "", "error", err)
 
 				// Force the connection closed so the listen loop returns and
@@ -297,6 +503,7 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 				defer func() {
 					_ = recover() // Ignore panic if channel already closed
 				}()
+
 				close(ch)
 			}()
 			delete(c.responses, msgID)
@@ -317,7 +524,8 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 		// heartbeat pong responses) arrives within ReadTimeout, ReadMessage
 		// returns an error, the loop exits and reconnection is triggered. This
 		// detects "stuck" connections that remain open but stop delivering data.
-		if err := conn.SetReadDeadline(time.Now().Add(c.cfg.ReadTimeout)); err != nil {
+		err := conn.SetReadDeadline(time.Now().Add(c.cfg.ReadTimeout))
+		if err != nil {
 			logger.Error("Error setting read deadline", "", "error", err)
 
 			return
@@ -328,7 +536,8 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				logger.Info("Received close message", "")
 
-				if err := c.shutdown(); err != nil {
+				err := c.shutdown()
+				if err != nil {
 					logger.Error("Error during shutdown", "", "error", err)
 				}
 
@@ -337,6 +546,7 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 
 			// Log error and return gracefully instead of panicking
 			logger.Error("Error reading from websocket", "", "error", err)
+
 			return
 		}
 
@@ -344,7 +554,9 @@ func (c *Client) listen(conn *websocket.Conn, done chan struct{}) {
 
 		// Get message ID
 		var msg CommandMessage
-		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+
+		err = json.Unmarshal(msgBytes, &msg)
+		if err != nil {
 			logger.Error("Error unmarshalling message", "", "error", err)
 
 			continue
@@ -414,7 +626,8 @@ func (c *Client) writeMessage(conn *websocket.Conn, messageType int, data []byte
 	c.writeMutex.Lock()
 	defer c.writeMutex.Unlock()
 
-	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+	err := conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err != nil {
 		return err
 	}
 
@@ -458,7 +671,9 @@ func (c *Client) removeMessageResponseListener(msgID int) {
 // Send a message to the websocket and return a channel to listen for responses.
 func (c *Client) sendMessageStreamResponses(msgBytes []byte) (ch chan []byte, err error) {
 	var msg jsonMessage
-	if err := json.Unmarshal(msgBytes, &msg); err != nil {
+
+	err = json.Unmarshal(msgBytes, &msg)
+	if err != nil {
 		return nil, err
 	}
 
@@ -467,7 +682,8 @@ func (c *Client) sendMessageStreamResponses(msgBytes []byte) (ch chan []byte, er
 
 	ch = c.addMessageResponseListener(msgID)
 
-	if err := c.send(msg); err != nil {
+	err = c.send(msg)
+	if err != nil {
 		// Send failed, so no response will ever arrive; drop the listener we
 		// just registered instead of leaking it in the responses map.
 		c.removeMessageResponseListener(msgID)
@@ -501,177 +717,4 @@ func (c *Client) readMessageFromChannel(ch chan []byte) (response []byte, err er
 	case <-time.After(readTimeoutSeconds * time.Second):
 		return nil, ErrReadTimeout
 	}
-}
-
-// Subscribe to home assistant events.
-func (c *Client) SubscribeEvents(eventType string, handler func(EventMessage)) error {
-	msg := subscribeEventsRequest{
-		ID:        c.nextMsgID(),
-		Type:      MessageTypeSubscribeEvents,
-		EventType: eventType,
-	}
-
-	reqBytes, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	responseChan, err := c.sendMessageStreamResponses(reqBytes)
-	if err != nil {
-		return err
-	}
-
-	// First message contains the initial response about the subscription
-	resBytes, err := c.readMessageFromChannel(responseChan)
-	if err != nil {
-		close(responseChan)
-
-		return err
-	}
-
-	var res subscribeEventsResponse
-	if err := json.Unmarshal(resBytes, &res); err != nil {
-		close(responseChan)
-
-		return err
-	}
-
-	if !res.Success {
-		close(responseChan)
-
-		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
-	}
-
-	// Consume events in order. A single consumer over a FIFO channel preserves
-	// the order Home Assistant sent them.
-	go func(ch chan []byte) {
-		for b := range ch {
-			var msg EventMessage
-			if err := json.Unmarshal(b, &msg); err != nil {
-				logger.Error("Error unmarshalling event message", "", "error", err)
-
-				continue
-			}
-
-			handler(msg)
-		}
-	}(responseChan)
-
-	logger.Info("Listening for state changes", "")
-
-	return nil
-}
-
-// SubscribeEventsRaw subscribes to home assistant events and passes the raw
-// JSON frame bytes to the handler instead of a parsed EventMessage. Useful
-// when callers need the unmodified payload (e.g. to display unknown fields).
-func (c *Client) SubscribeEventsRaw(eventType string, handler func([]byte)) error {
-	msg := subscribeEventsRequest{
-		ID:        c.nextMsgID(),
-		Type:      MessageTypeSubscribeEvents,
-		EventType: eventType,
-	}
-
-	reqBytes, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	responseChan, err := c.sendMessageStreamResponses(reqBytes)
-	if err != nil {
-		return err
-	}
-
-	resBytes, err := c.readMessageFromChannel(responseChan)
-	if err != nil {
-		close(responseChan)
-
-		return err
-	}
-
-	var res subscribeEventsResponse
-	if err := json.Unmarshal(resBytes, &res); err != nil {
-		close(responseChan)
-
-		return err
-	}
-
-	if !res.Success {
-		close(responseChan)
-
-		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resBytes)
-	}
-
-	// Consume events in order (single consumer over a FIFO channel).
-	go func(ch chan []byte) {
-		for b := range ch {
-			handler(b)
-		}
-	}(responseChan)
-
-	return nil
-}
-
-func (c *Client) CallService(msg CallServiceRequest) (CallServiceResponse, error) {
-	if c.getState() != stateConnected {
-		return CallServiceResponse{}, ErrNotConnected
-	}
-
-	reqBytes, err := json.Marshal(msg)
-	if err != nil {
-		return CallServiceResponse{}, err
-	}
-
-	resBytes, err := c.sendMessageWaitResponse(reqBytes)
-	if err != nil {
-		return CallServiceResponse{}, err
-	}
-
-	var resp CallServiceResponse
-	if err := json.Unmarshal(resBytes, &resp); err != nil {
-		return CallServiceResponse{}, err
-	}
-
-	if resp.Type == MessageTypeResult && !resp.Success {
-		logger.Error("Call service failed", "", "err", resp.Error)
-	}
-
-	return resp, nil
-}
-
-func (c *Client) GetStates() ([]homeassistant.State, error) {
-	if c.getState() != stateConnected {
-		return nil, ErrNotConnected
-	}
-
-	msg := CommandMessage{
-		ID:   c.nextMsgID(),
-		Type: MessageTypeGetStates,
-	}
-
-	reqBytes, err := json.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	resBytes, err := c.sendMessageWaitResponse(reqBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp CommandResponse
-	if err := json.Unmarshal(resBytes, &resp); err != nil {
-		return nil, err
-	}
-
-	if !resp.Success {
-		return nil, fmt.Errorf("%w: %s", ErrUnexpectedResponse, resp.Error)
-	}
-
-	var states []homeassistant.State
-	if err := json.Unmarshal(resp.Result, &states); err != nil {
-		return nil, err
-	}
-
-	return states, nil
 }

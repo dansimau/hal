@@ -6,6 +6,9 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+// testDBName is a relative database file name used in sqliteFilePath cases.
+const testDBName = "state.db"
+
 func TestCOWProblems(t *testing.T) {
 	t.Parallel()
 
@@ -35,16 +38,16 @@ func TestSQLiteFilePath(t *testing.T) {
 		want   string
 		isFile bool
 	}{
-		{"state.db", "state.db", true},
+		{testDBName, testDBName, true},
 		{"/data/sqlite.db", "/data/sqlite.db", true},
-		{"state.db?_pragma=foo", "state.db", true},
-		{"file:state.db", "state.db", true},
+		{testDBName + "?_pragma=foo", testDBName, true},
+		{"file:" + testDBName, testDBName, true},
 		{"file:data/state.db?mode=rwc", "data/state.db", true},
 		{"file:///abs/state.db", "/abs/state.db", true},
 		{"file://localhost/abs/state.db", "/abs/state.db", true},
 		{"file:my%20state.db", "my state.db", true},
 		{"", "", false},
-		{":memory:", "", false},
+		{memoryDatabase, "", false},
 		{"file::memory:?cache=shared", "", false},
 		{"file:state.db?mode=memory", "", false},
 		{"file://otherhost/state.db", "", false},

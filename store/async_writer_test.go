@@ -12,6 +12,12 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+// testLogLevel is the level used for log rows written by tests.
+const testLogLevel = "INFO"
+
+// errTest is returned by write operations that are meant to fail.
+var errTest = errors.New("test failure")
+
 // TestStoreEnqueueWrite verifies that a write enqueued through the Store's async
 // writer is eventually persisted, and that WaitForWrites blocks until it is.
 func TestStoreEnqueueWrite(t *testing.T) {
@@ -26,7 +32,7 @@ func TestStoreEnqueueWrite(t *testing.T) {
 	db.EnqueueWrite(func(tx *gorm.DB) error {
 		return tx.Create(&store.Log{
 			Timestamp: time.Now(),
-			Level:     "INFO",
+			Level:     testLogLevel,
 			LogText:   "hello",
 		}).Error
 	})
@@ -34,7 +40,9 @@ func TestStoreEnqueueWrite(t *testing.T) {
 	db.WaitForWrites()
 
 	var count int64
-	if err := db.Model(&store.Log{}).Count(&count).Error; err != nil {
+
+	err = db.Model(&store.Log{}).Count(&count).Error
+	if err != nil {
 		t.Fatalf("Failed to count logs: %v", err)
 	}
 
@@ -60,13 +68,14 @@ func TestStoreCloseFlushesWrites(t *testing.T) {
 	db.EnqueueWrite(func(tx *gorm.DB) error {
 		return tx.Create(&store.Log{
 			Timestamp: time.Now(),
-			Level:     "INFO",
+			Level:     testLogLevel,
 			LogText:   "flushed",
 		}).Error
 	})
 
 	// Close should drain the queue before closing the DB.
-	if err := db.Close(); err != nil {
+	err = db.Close()
+	if err != nil {
 		t.Fatalf("Failed to close store: %v", err)
 	}
 
@@ -77,7 +86,9 @@ func TestStoreCloseFlushesWrites(t *testing.T) {
 	defer reopened.Close()
 
 	var count int64
-	if err := reopened.Model(&store.Log{}).Count(&count).Error; err != nil {
+
+	err = reopened.Model(&store.Log{}).Count(&count).Error
+	if err != nil {
 		t.Fatalf("Failed to count logs: %v", err)
 	}
 
@@ -127,7 +138,7 @@ func waitForLogs(t *testing.T, db *store.Store, want int64) {
 
 func enqueueLog(db *store.Store, text string) {
 	db.EnqueueWrite(func(gdb *gorm.DB) error {
-		return gdb.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: text}).Error
+		return gdb.Create(&store.Log{Timestamp: time.Now(), Level: testLogLevel, LogText: text}).Error
 	})
 }
 
@@ -234,9 +245,11 @@ func stallWriter(t *testing.T, db *store.Store) func() {
 
 	started := make(chan struct{})
 	release := make(chan struct{})
+
 	db.EnqueueWrite(func(*gorm.DB) error {
 		close(started)
 		<-release
+
 		return nil
 	})
 	<-started
@@ -251,10 +264,12 @@ func TestEnqueueDoesNotBlockWhenQueueFull(t *testing.T) {
 	release := stallWriter(t, db)
 
 	done := make(chan struct{})
+
 	go func() {
-		for i := 0; i < 20000; i++ {
+		for range 20000 {
 			db.EnqueueWrite(func(*gorm.DB) error { return nil })
 		}
+
 		close(done)
 	}()
 
@@ -276,14 +291,16 @@ func TestWritesAreBatchedAndCommitted(t *testing.T) {
 	db := openTestStore(t)
 
 	const n = 1200
-	for i := 0; i < n; i++ {
+	for i := range n {
 		db.EnqueueWrite(func(gdb *gorm.DB) error {
-			return gdb.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: fmt.Sprintf("log %d", i)}).Error
+			return gdb.Create(&store.Log{Timestamp: time.Now(), Level: testLogLevel, LogText: fmt.Sprintf("log %d", i)}).Error
 		})
 	}
+
 	db.WaitForWrites()
 
 	var count int64
+
 	assert.NilError(t, db.Model(&store.Log{}).Count(&count).Error)
 	assert.Equal(t, count, int64(n))
 	assert.Equal(t, db.DroppedWrites(), int64(0))
@@ -296,17 +313,18 @@ func TestFailedWriteDoesNotLoseRestOfBatch(t *testing.T) {
 	release := stallWriter(t, db)
 
 	db.EnqueueWrite(func(gdb *gorm.DB) error {
-		return gdb.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: "first"}).Error
+		return gdb.Create(&store.Log{Timestamp: time.Now(), Level: testLogLevel, LogText: "first"}).Error
 	})
-	db.EnqueueWrite(func(*gorm.DB) error { return errors.New("boom") })
+	db.EnqueueWrite(func(*gorm.DB) error { return errTest })
 	db.EnqueueWrite(func(gdb *gorm.DB) error {
-		return gdb.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: "second"}).Error
+		return gdb.Create(&store.Log{Timestamp: time.Now(), Level: testLogLevel, LogText: "second"}).Error
 	})
 
 	release()
 	db.WaitForWrites()
 
 	var count int64
+
 	assert.NilError(t, db.Model(&store.Log{}).Count(&count).Error)
 	assert.Equal(t, count, int64(2))
 }
@@ -320,12 +338,14 @@ func TestEntityStatesAreCoalesced(t *testing.T) {
 	for _, state := range []string{"on", "off", "on", "off"} {
 		db.EnqueueEntityState("light.kitchen", &homeassistant.State{EntityID: "light.kitchen", State: state})
 	}
+
 	db.EnqueueEntityState("light.hall", &homeassistant.State{EntityID: "light.hall", State: "on"})
 
 	release()
 	db.WaitForWrites()
 
 	var entities []store.Entity
+
 	assert.NilError(t, db.Order("id").Find(&entities).Error)
 	assert.Equal(t, len(entities), 2)
 	assert.Equal(t, entities[0].ID, "light.hall")
@@ -340,11 +360,12 @@ func TestWaitForWritesWithFullQueue(t *testing.T) {
 	db := openTestStore(t)
 	release := stallWriter(t, db)
 
-	for i := 0; i < 15000; i++ {
+	for range 15000 {
 		db.EnqueueWrite(func(*gorm.DB) error { return nil })
 	}
 
 	done := make(chan struct{})
+
 	go func() {
 		db.WaitForWrites()
 		close(done)

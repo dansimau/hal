@@ -37,7 +37,7 @@ type Service struct {
 	stopChan chan struct{}
 }
 
-// NewService creates a new metrics service
+// NewService creates a new metrics service.
 func NewService(db *store.Store) *Service {
 	return &Service{
 		db:       db,
@@ -49,16 +49,17 @@ func NewService(db *store.Store) *Service {
 func (s *Service) Start() {
 	go s.rollupLoop()
 	go s.pruneLoop()
+
 	logger.Info("Metrics service started", "")
 }
 
-// Stop stops the metrics service
+// Stop stops the metrics service.
 func (s *Service) Stop() {
 	close(s.stopChan)
 	logger.Info("Metrics service stopped", "")
 }
 
-// RecordCounter records a counter metric (value = 1)
+// RecordCounter records a counter metric (value = 1).
 func (s *Service) RecordCounter(metricType store.MetricType, entityID, automationName string) {
 	metric := store.Metric{
 		Timestamp:      time.Now(),
@@ -73,7 +74,7 @@ func (s *Service) RecordCounter(metricType store.MetricType, entityID, automatio
 	})
 }
 
-// RecordTimer records a timer metric (value = duration in nanoseconds)
+// RecordTimer records a timer metric (value = duration in nanoseconds).
 func (s *Service) RecordTimer(metricType store.MetricType, duration time.Duration, entityID, automationName string) {
 	metric := store.Metric{
 		Timestamp:      time.Now(),
@@ -97,7 +98,8 @@ func (s *Service) rollupLoop() {
 	defer ticker.Stop()
 
 	for {
-		if err := s.rollupPending(time.Now()); err != nil {
+		err := s.rollupPending(time.Now())
+		if err != nil {
 			logger.Error("Failed to roll up metrics", "", "error", err)
 		}
 
@@ -119,7 +121,8 @@ func (s *Service) pruneLoop() {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
-			if err := pruneOldData(s.db.DB, time.Now()); err != nil {
+			err := pruneOldData(s.db.DB, time.Now())
+			if err != nil {
 				logger.Error("Failed to prune metrics", "", "error", err)
 			}
 		}
@@ -140,6 +143,7 @@ func (s *Service) rollupPending(now time.Time) error {
 	if err != nil {
 		return err
 	}
+
 	if !ok {
 		return nil // no raw data to roll up
 	}
@@ -150,7 +154,8 @@ func (s *Service) rollupPending(now time.Time) error {
 			chunkEnd = upper
 		}
 
-		if err := rollupWindow(s.db.DB, chunkStart, chunkEnd); err != nil {
+		err := rollupWindow(s.db.DB, chunkStart, chunkEnd)
+		if err != nil {
 			return err
 		}
 	}
@@ -166,6 +171,7 @@ func rollupResumePoint(db *gorm.DB) (time.Time, bool, error) {
 	if err != nil {
 		return time.Time{}, false, err
 	}
+
 	if ok {
 		// Resume at the minute after the latest rolled-up one.
 		return time.Unix(watermark, 0).Add(time.Minute), true, nil
@@ -175,7 +181,9 @@ func rollupResumePoint(db *gorm.DB) (time.Time, bool, error) {
 	// the timestamp deserialises correctly (a raw MIN() aggregate comes back as a
 	// string).
 	var earliest store.Metric
-	if err := db.Select("timestamp").Order("timestamp ASC").First(&earliest).Error; err != nil {
+
+	err = db.Select("timestamp").Order("timestamp ASC").First(&earliest).Error
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return time.Time{}, false, nil
 		}
@@ -192,9 +200,12 @@ func latestRolledMinute(db *gorm.DB) (int64, bool, error) {
 	var result struct {
 		Max *int64
 	}
-	if err := db.Model(&store.MetricRollup{}).Select("MAX(bucket_start) as max").Scan(&result).Error; err != nil {
+
+	err := db.Model(&store.MetricRollup{}).Select("MAX(bucket_start) as max").Scan(&result).Error
+	if err != nil {
 		return 0, false, err
 	}
+
 	if result.Max == nil {
 		return 0, false, nil
 	}
@@ -208,10 +219,12 @@ func latestRolledMinute(db *gorm.DB) (int64, bool, error) {
 // idempotent.
 func rollupWindow(db *gorm.DB, lower, upper time.Time) error {
 	var raw []store.Metric
-	if err := db.
+
+	err := db.
 		Select("metric_type", "timestamp", "value").
 		Where("timestamp >= ? AND timestamp < ?", lower, upper).
-		Find(&raw).Error; err != nil {
+		Find(&raw).Error
+	if err != nil {
 		return err
 	}
 
@@ -242,6 +255,7 @@ func aggregate(raw []store.Metric) []store.MetricRollup {
 	}
 
 	accs := make(map[key]*accumulator)
+
 	for _, m := range raw {
 		k := key{m.MetricType, m.Timestamp.Truncate(time.Minute).Unix()}
 
@@ -289,8 +303,10 @@ func pruneOldData(db *gorm.DB, now time.Time) error {
 		if count > 0 {
 			logger.Info("Pruned old raw metrics", "", "count", count, "cutoff", rawCutoff)
 		}
+
 		if err != nil {
 			logger.Error("Failed to prune old raw metrics", "", "error", err)
+
 			return err
 		}
 	default:
@@ -298,17 +314,23 @@ func pruneOldData(db *gorm.DB, now time.Time) error {
 	}
 
 	rollupCutoff := now.Add(-rollupRetention).Unix()
+
 	count, err := store.DeleteInChunks(db, &store.MetricRollup{}, "bucket_start < ?", rollupCutoff)
+
 	if count > 0 {
 		logger.Info("Pruned old metric rollups", "", "count", count, "cutoff", rollupCutoff)
 	}
+
 	if err != nil {
 		logger.Error("Failed to prune old metric rollups", "", "error", err)
+
 		return err
 	}
 
-	if err := store.IncrementalVacuum(db, vacuumPages); err != nil {
+	err = store.IncrementalVacuum(db, vacuumPages)
+	if err != nil {
 		logger.Error("Failed to vacuum database", "", "error", err)
+
 		return err
 	}
 

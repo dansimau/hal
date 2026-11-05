@@ -44,13 +44,16 @@ func TestBatchIsRetriedWhileDatabaseLocked(t *testing.T) {
 	path := t.TempDir() + "/locked.db"
 	db, err := store.Open(path)
 	assert.NilError(t, err)
+
 	defer db.Close()
 
 	release := holdWriteLock(t, path)
 
 	for i := range 3 {
+		text := string(rune('a' + i%26)) // i%26 keeps the rune a lowercase letter
+
 		db.EnqueueWrite(func(tx *gorm.DB) error {
-			return tx.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: string(rune('a' + i))}).Error
+			return tx.Create(&store.Log{Timestamp: time.Now(), Level: testLogLevel, LogText: text}).Error
 		})
 	}
 
@@ -61,6 +64,7 @@ func TestBatchIsRetriedWhileDatabaseLocked(t *testing.T) {
 	db.WaitForWrites()
 
 	var count int64
+
 	assert.NilError(t, db.Model(&store.Log{}).Count(&count).Error)
 	assert.Equal(t, count, int64(3))
 }
@@ -76,6 +80,7 @@ func TestDeleteInChunks(t *testing.T) {
 	for i := range rollups {
 		rollups[i] = store.MetricRollup{MetricType: store.MetricTypeTickProcessingTime, BucketStart: int64(i * 60)}
 	}
+
 	assert.NilError(t, db.CreateInBatches(rollups, 500).Error)
 
 	deleted, err := store.DeleteInChunks(db.DB, &store.MetricRollup{}, "bucket_start < ?", 2100*60)
@@ -83,6 +88,7 @@ func TestDeleteInChunks(t *testing.T) {
 	assert.Equal(t, deleted, int64(2100))
 
 	var remaining int64
+
 	assert.NilError(t, db.Model(&store.MetricRollup{}).Count(&remaining).Error)
 	assert.Equal(t, remaining, int64(400))
 }
@@ -100,6 +106,7 @@ func TestPruneQueriesUseIndexes(t *testing.T) {
 		{"SELECT id FROM metrics WHERE timestamp < '2026-01-01'", "idx_metric_timestamp"},
 	} {
 		var plan []struct{ Detail string }
+
 		assert.NilError(t, db.Raw("EXPLAIN QUERY PLAN "+tc.query).Scan(&plan).Error)
 		assert.Assert(t, len(plan) > 0)
 		assert.Assert(t, strings.Contains(plan[0].Detail, tc.index), "%s: plan %q", tc.query, plan[0].Detail)
@@ -115,15 +122,17 @@ func TestOpenSwitchesFullAutoVacuumToIncremental(t *testing.T) {
 
 	legacy, err := sql.Open("sqlite", path+"?_pragma=auto_vacuum(FULL)")
 	assert.NilError(t, err)
-	_, err = legacy.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+	_, err = legacy.ExecContext(context.Background(), "CREATE TABLE t (id INTEGER PRIMARY KEY)")
 	assert.NilError(t, err)
 	assert.NilError(t, legacy.Close())
 
 	db, err := store.Open(path)
 	assert.NilError(t, err)
+
 	defer db.Close()
 
 	var autoVacuum int
+
 	assert.NilError(t, db.Raw("PRAGMA auto_vacuum").Scan(&autoVacuum).Error)
 	assert.Equal(t, autoVacuum, 2) // INCREMENTAL
 	assert.NilError(t, store.IncrementalVacuum(db.DB, 10))
@@ -137,6 +146,7 @@ func TestIncrementalVacuumReclaimsPages(t *testing.T) {
 
 	db, err := store.Open(t.TempDir() + "/vacuum.db")
 	assert.NilError(t, err)
+
 	defer db.Close()
 
 	for _, stmt := range []string{
@@ -150,7 +160,9 @@ func TestIncrementalVacuumReclaimsPages(t *testing.T) {
 
 	freePages := func() int {
 		var n int
+
 		assert.NilError(t, db.Raw("PRAGMA freelist_count").Scan(&n).Error)
+
 		return n
 	}
 

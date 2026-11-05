@@ -18,16 +18,16 @@ type Entity struct {
 	State *homeassistant.State `gorm:"serializer:json"`
 }
 
-// MetricType represents the type of metric being recorded
+// MetricType represents the type of metric being recorded.
 type MetricType string
 
-// MetricType constants
+// MetricType constants.
 const (
 	MetricTypeAutomationTriggered MetricType = "automation_triggered"
 	MetricTypeTickProcessingTime  MetricType = "tick_processing_time"
 )
 
-// Metric represents a single metric data point
+// Metric represents a single metric data point.
 type Metric struct {
 	ID             uint       `gorm:"primaryKey;autoIncrement"`
 	MetricType     MetricType `gorm:"index:idx_metric_type_timestamp,priority:1;not null;size:50"`
@@ -57,7 +57,7 @@ type MetricRollup struct {
 	Histogram map[int32]int64 `gorm:"serializer:json"`
 }
 
-// Log represents a single log entry
+// Log represents a single log entry.
 type Log struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
 	Timestamp time.Time `gorm:"index;not null"`

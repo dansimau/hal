@@ -1,6 +1,7 @@
 package hal
 
 import (
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -21,40 +22,50 @@ func waitForReconnection(t *testing.T, conn *Connection, expectedAttempts int) {
 	})
 }
 
-// waitForEventSubscription waits for event subscriptions to be re-established.
-func waitForEventSubscription(t *testing.T, server *hassws.Server, expectedCount int) {
+// waitForEventSubscription waits for at least one event subscription to be
+// (re-)established on the server.
+func waitForEventSubscription(t *testing.T, server *hassws.Server) {
 	t.Helper()
 
 	waitFor(t, "event subscription", func() bool {
-		return server.GetSubscriptionCount() >= expectedCount
+		return server.GetSubscriptionCount() >= 1
 	}, func() {
-		t.Logf("Subscription count: %d (expected >= %d)", server.GetSubscriptionCount(), expectedCount)
+		t.Logf("Subscription count: %d (expected >= 1)", server.GetSubscriptionCount())
 	})
 }
 
+// sendStateAndWait sends a state change event for the test entity and waits
+// until the entity reflects the new state.
+func sendStateAndWait(t *testing.T, server *hassws.Server, entity *Entity, state, waitName string) {
+	t.Helper()
+
+	server.SendEvent(homeassistant.Event{
+		EventData: homeassistant.EventData{
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{
+				EntityID: testEntityID,
+				State:    state,
+			},
+		},
+	})
+
+	waitFor(t, waitName, func() bool {
+		return entity.GetState().State == state
+	}, func() {
+		t.Logf("Entity state: %v", entity.GetState())
+	})
+}
+
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestBasicReconnection(t *testing.T) {
 	conn, server, cleanup := newFastReconnectClientServer(t)
 	defer cleanup()
 
 	// Verify initial connection works by sending an event
-	testEntity := NewEntity("test.entity")
+	testEntity := NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
-	server.SendEvent(homeassistant.Event{
-		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{
-				EntityID: "test.entity",
-				State:    "on",
-			},
-		},
-	})
-
-	waitFor(t, "initial state update", func() bool {
-		return testEntity.GetState().State == "on"
-	}, func() {
-		t.Logf("Entity state: %v", testEntity.GetState())
-	})
+	sendStateAndWait(t, server, testEntity, stateOn, "initial state update")
 
 	// Force disconnect
 	assert.NilError(t, server.DisconnectClient())
@@ -63,26 +74,13 @@ func TestBasicReconnection(t *testing.T) {
 	waitForReconnection(t, conn, 1)
 
 	// Wait for subscription to be re-established
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 
 	// Verify connection is working by sending another event
-	server.SendEvent(homeassistant.Event{
-		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{
-				EntityID: "test.entity",
-				State:    "off",
-			},
-		},
-	})
-
-	waitFor(t, "state update after reconnection", func() bool {
-		return testEntity.GetState().State == "off"
-	}, func() {
-		t.Logf("Entity state: %v", testEntity.GetState())
-	})
+	sendStateAndWait(t, server, testEntity, stateOff, "state update after reconnection")
 }
 
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestServiceCallsFailDuringDisconnection(t *testing.T) {
 	conn, server, cleanup := newFastReconnectClientServer(t)
 	defer cleanup()
@@ -108,34 +106,23 @@ func TestServiceCallsFailDuringDisconnection(t *testing.T) {
 	waitForReconnection(t, conn, 1)
 
 	// Wait for subscription to be re-established
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 
 	// Service calls should work again
 	err = testEntity.TurnOn()
 	assert.NilError(t, err)
 }
 
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestSubscriptionRestoredAfterReconnect(t *testing.T) {
 	conn, server, cleanup := newFastReconnectClientServer(t)
 	defer cleanup()
 
-	testEntity := NewEntity("test.entity")
+	testEntity := NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	// Send event, verify received
-	server.SendEvent(homeassistant.Event{
-		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{
-				EntityID: "test.entity",
-				State:    "on",
-			},
-		},
-	})
-
-	waitFor(t, "initial event received", func() bool {
-		return testEntity.GetState().State == "on"
-	}, func() {})
+	sendStateAndWait(t, server, testEntity, stateOn, "initial event received")
 
 	// Disconnect
 	assert.NilError(t, server.DisconnectClient())
@@ -144,45 +131,22 @@ func TestSubscriptionRestoredAfterReconnect(t *testing.T) {
 	waitForReconnection(t, conn, 1)
 
 	// Verify subscription re-established (should have at least 1 subscription)
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 
 	// Send new event and verify it's received (proves subscription works)
-	server.SendEvent(homeassistant.Event{
-		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{
-				EntityID: "test.entity",
-				State:    "off",
-			},
-		},
-	})
-
-	waitFor(t, "event after reconnection", func() bool {
-		return testEntity.GetState().State == "off"
-	}, func() {})
+	sendStateAndWait(t, server, testEntity, stateOff, "event after reconnection")
 }
 
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestStateSyncAfterReconnect(t *testing.T) {
 	conn, server, cleanup := newFastReconnectClientServer(t)
 	defer cleanup()
 
-	testEntity := NewEntity("test.entity")
+	testEntity := NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	// Change state while connected
-	server.SendEvent(homeassistant.Event{
-		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{
-				EntityID: "test.entity",
-				State:    "on",
-			},
-		},
-	})
-
-	waitFor(t, "state synced", func() bool {
-		return testEntity.GetState().State == "on"
-	}, func() {})
+	sendStateAndWait(t, server, testEntity, stateOn, "state synced")
 
 	// Disconnect
 	assert.NilError(t, server.DisconnectClient())
@@ -191,68 +155,45 @@ func TestStateSyncAfterReconnect(t *testing.T) {
 	waitForReconnection(t, conn, 1)
 
 	// Wait for subscription to be re-established
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 
 	// The reconnection process calls syncStates(), but since the mock server
 	// returns empty state list, we can't directly test state re-sync.
 	// This test verifies that reconnection completes successfully.
 
 	// Verify connection works by sending new event
-	server.SendEvent(homeassistant.Event{
-		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{
-				EntityID: "test.entity",
-				State:    "off",
-			},
-		},
-	})
-
-	waitFor(t, "state after reconnect", func() bool {
-		return testEntity.GetState().State == "off"
-	}, func() {})
+	sendStateAndWait(t, server, testEntity, stateOff, "state after reconnect")
 }
 
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestMultipleDisconnectReconnectCycles(t *testing.T) {
 	conn, server, cleanup := newFastReconnectClientServer(t)
 	defer cleanup()
 
-	testEntity := NewEntity("test.entity")
+	testEntity := NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
-	for i := 1; i <= 3; i++ {
+	const cycles = 3
+
+	for cycle := 1; cycle <= cycles; cycle++ {
 		// Disconnect
 		assert.NilError(t, server.DisconnectClient())
 
 		// Wait for reconnection
-		waitForReconnection(t, conn, i)
+		waitForReconnection(t, conn, cycle)
 
 		// Wait for subscription to be re-established
-		waitForEventSubscription(t, server, 1)
+		waitForEventSubscription(t, server)
 
 		// Verify functionality by sending event
-		server.SendEvent(homeassistant.Event{
-			EventData: homeassistant.EventData{
-				EntityID: "test.entity",
-				NewState: &homeassistant.State{
-					EntityID: "test.entity",
-					State:    "cycle" + string(rune('0'+i)),
-				},
-			},
-		})
-
-		waitFor(t, "event in cycle", func() bool {
-			state := testEntity.GetState().State
-			return state == "cycle"+string(rune('0'+i))
-		}, func() {
-			t.Logf("Cycle %d - Entity state: %v", i, testEntity.GetState().State)
-		})
+		sendStateAndWait(t, server, testEntity, "cycle"+strconv.Itoa(cycle), "event in cycle")
 	}
 
 	// Verify we had exactly 3 reconnection attempts
-	assert.Equal(t, 3, conn.GetReconnectAttempts())
+	assert.Equal(t, cycles, conn.GetReconnectAttempts())
 }
 
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestConcurrentServiceCallsDuringReconnection(t *testing.T) {
 	conn, server, cleanup := newFastReconnectClientServer(t)
 	defer cleanup()
@@ -268,12 +209,15 @@ func TestConcurrentServiceCallsDuringReconnection(t *testing.T) {
 
 	// Launch multiple goroutines calling services
 	var wg sync.WaitGroup
+
 	errChan := make(chan error, 10)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
+
 		go func() {
 			defer wg.Done()
+
 			err := testEntity.TurnOn()
 			if err != nil {
 				errChan <- err
@@ -286,8 +230,10 @@ func TestConcurrentServiceCallsDuringReconnection(t *testing.T) {
 
 	// Verify all calls returned ErrNotConnected
 	errorCount := 0
+
 	for err := range errChan {
 		assert.ErrorIs(t, err, hassws.ErrNotConnected)
+
 		errorCount++
 	}
 
@@ -295,9 +241,10 @@ func TestConcurrentServiceCallsDuringReconnection(t *testing.T) {
 	assert.Assert(t, errorCount == 10, "Expected 10 errors, got %d", errorCount)
 }
 
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestShutdownDuringReconnection(t *testing.T) {
 	conn, server, cleanup := newClientServerWithConfig(t, Config{
-		DatabasePath:      ":memory:",
+		DatabasePath:      memoryDatabasePath,
 		ReconnectInterval: 1 * time.Second, // Slow retry for this test
 	})
 	defer cleanup()
@@ -313,6 +260,7 @@ func TestShutdownDuringReconnection(t *testing.T) {
 
 	// Call Close() while reconnection is pending
 	done := make(chan struct{})
+
 	go func() {
 		conn.Close()
 		close(done)
@@ -328,10 +276,12 @@ func TestShutdownDuringReconnection(t *testing.T) {
 
 	// Verify no additional reconnection attempts after shutdown
 	time.Sleep(200 * time.Millisecond)
+
 	attemptsAfter := conn.GetReconnectAttempts()
 	assert.Equal(t, attemptsBefore, attemptsAfter, "Reconnection attempts should not increase after shutdown")
 }
 
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestReconnectionAttemptCounter(t *testing.T) {
 	conn, server, cleanup := newFastReconnectClientServer(t)
 	defer cleanup()
@@ -342,13 +292,13 @@ func TestReconnectionAttemptCounter(t *testing.T) {
 	// First disconnect/reconnect
 	assert.NilError(t, server.DisconnectClient())
 	waitForReconnection(t, conn, 1)
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 	assert.Equal(t, 1, conn.GetReconnectAttempts())
 
 	// Second disconnect/reconnect
 	assert.NilError(t, server.DisconnectClient())
 	waitForReconnection(t, conn, 2)
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 	assert.Equal(t, 2, conn.GetReconnectAttempts())
 
 	// Reset counter
@@ -358,6 +308,6 @@ func TestReconnectionAttemptCounter(t *testing.T) {
 	// Third disconnect/reconnect (counter starts from 0 again)
 	assert.NilError(t, server.DisconnectClient())
 	waitForReconnection(t, conn, 1)
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 	assert.Equal(t, 1, conn.GetReconnectAttempts())
 }

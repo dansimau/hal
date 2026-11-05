@@ -74,7 +74,7 @@ func TestTimerConditionRecheckedBeforeAction(t *testing.T) {
 
 	timer := halautomations.NewTimer("test timer").
 		Duration(10 * time.Millisecond).
-		Condition(func() bool { return allowed.Load() }).
+		Condition(allowed.Load).
 		Run(func(_ context.Context) {
 			ran.Store(true)
 		})

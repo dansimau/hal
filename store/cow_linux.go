@@ -69,16 +69,18 @@ func isOpenInProcess(path string) bool {
 	return openFiles.count[id] > 0
 }
 
-// prepareDatabaseFile disables copy-on-write for a new database on btrfs, then
-// warns if the database is on copy-on-write storage. The no-copy-on-write flag
-// can only be set on an empty file, so the file is created (empty) before
-// SQLite opens it. Failures are logged, never returned: they only affect
+// createNoCOWFile disables copy-on-write for a new database on btrfs. The
+// no-copy-on-write flag can only be set on an empty file, so the file is
+// created (empty) before SQLite opens it. It reports whether the database
+// storage should then be checked for copy-on-write (see warnCopyOnWrite):
+// false if the database is not on btrfs, is already open in this process, or
+// could not be created. Failures are logged, never returned: they only affect
 // performance. Callers must serialise this with opening the database (see
 // openMu) so the database file is never opened and closed here while SQLite
 // has it open.
-func prepareDatabaseFile(path string) {
+func createNoCOWFile(path string) bool {
 	if !isBtrfs(path) || isOpenInProcess(path) {
-		return
+		return false
 	}
 
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
@@ -90,10 +92,10 @@ func prepareDatabaseFile(path string) {
 		_ = f.Close()
 	case !errors.Is(err, os.ErrExist):
 		// Let SQLite report the problem when it opens the file
-		return
+		return false
 	}
 
-	warnCopyOnWrite(path)
+	return true
 }
 
 // readCOWState reports the filesystem and inode flags of file and dir. ok is

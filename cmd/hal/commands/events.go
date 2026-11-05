@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,8 +20,8 @@ import (
 
 func NewEventsCmd() *cobra.Command {
 	var (
-		excludes  []string
-		jqFilter  string
+		excludes []string
+		jqFilter string
 	)
 
 	cmd := &cobra.Command{
@@ -33,18 +34,19 @@ debugging of automations.`,
   hal events --exclude state_changed
   hal events --exclude '*sun.sun*' --exclude '*device_tracker*'
   hal events --jq '.event | select(.event_type == "state_changed") | .data.entity_id'`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEventsCommand(excludes, jqFilter)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runEventsCommand(cmd.OutOrStdout(), excludes, jqFilter)
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&excludes, "exclude", nil, "Glob pattern; events whose JSON matches are suppressed (repeatable)")
+	cmd.Flags().StringArrayVar(&excludes, "exclude", nil,
+		"Glob pattern; events whose JSON matches are suppressed (repeatable)")
 	cmd.Flags().StringVar(&jqFilter, "jq", "", "Pipe each event JSON through this jq filter instead of pretty-printing")
 
 	return cmd
 }
 
-func runEventsCommand(excludes []string, jqFilter string) error {
+func runEventsCommand(out io.Writer, excludes []string, jqFilter string) error {
 	cfg, err := hal.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -57,7 +59,8 @@ func runEventsCommand(excludes []string, jqFilter string) error {
 		ReadTimeout:  cfg.ReadTimeout,
 	})
 
-	if err := client.Connect(); err != nil {
+	err = client.Connect()
+	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	defer client.Close()
@@ -67,13 +70,13 @@ func runEventsCommand(excludes []string, jqFilter string) error {
 		return err
 	}
 
-	emit, cleanup, err := makeEmitter(jqFilter)
+	emit, cleanup, err := makeEmitter(out, jqFilter)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	if err := client.SubscribeEventsRaw("", func(raw []byte) {
+	err = client.SubscribeEventsRaw("", func(raw []byte) {
 		for _, re := range patterns {
 			if re.Match(raw) {
 				return
@@ -81,7 +84,8 @@ func runEventsCommand(excludes []string, jqFilter string) error {
 		}
 
 		emit(raw)
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to subscribe: %w", err)
 	}
 
@@ -93,21 +97,24 @@ func runEventsCommand(excludes []string, jqFilter string) error {
 }
 
 // makeEmitter returns a function that handles a single raw event payload.
-// When jqFilter is empty, it pretty-prints the JSON. When set, it spawns a
-// long-running `jq` subprocess and pipes each payload through it.
-func makeEmitter(jqFilter string) (emit func([]byte), cleanup func(), err error) {
+// When jqFilter is empty, it pretty-prints the JSON to out. When set, it spawns
+// a long-running `jq` subprocess writing to out and pipes each payload through it.
+func makeEmitter(out io.Writer, jqFilter string) (emit func([]byte), cleanup func(), err error) {
 	if jqFilter == "" {
 		return func(raw []byte) {
 			var pretty bytes.Buffer
-			if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+
+			err := json.Indent(&pretty, raw, "", "  ")
+			if err != nil {
 				pretty.Write(raw)
 			}
-			fmt.Println(pretty.String())
+
+			fmt.Fprintln(out, pretty.String())
 		}, func() {}, nil
 	}
 
-	cmd := exec.Command("jq", "-r", jqFilter)
-	cmd.Stdout = os.Stdout
+	cmd := exec.CommandContext(context.Background(), "jq", "-r", jqFilter)
+	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 
 	stdin, err := cmd.StdinPipe()
@@ -115,14 +122,17 @@ func makeEmitter(jqFilter string) (emit func([]byte), cleanup func(), err error)
 		return nil, nil, fmt.Errorf("failed to open jq stdin: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	if err != nil {
 		return nil, nil, fmt.Errorf("failed to start jq (is it installed?): %w", err)
 	}
 
 	emit = func(raw []byte) {
-		if _, err := stdin.Write(raw); err != nil {
+		_, writeErr := stdin.Write(raw)
+		if writeErr != nil {
 			return
 		}
+
 		_, _ = io.WriteString(stdin, "\n")
 	}
 
@@ -140,24 +150,30 @@ func makeEmitter(jqFilter string) (emit func([]byte), cleanup func(), err error)
 // instead of `--exclude '*camera*'`.
 func compileGlobs(patterns []string) ([]*regexp.Regexp, error) {
 	out := make([]*regexp.Regexp, 0, len(patterns))
-	for _, p := range patterns {
-		var b strings.Builder
-		b.WriteString("(?s)")
-		for _, r := range p {
+
+	for _, pattern := range patterns {
+		var builder strings.Builder
+
+		builder.WriteString("(?s)")
+
+		for _, r := range pattern {
 			switch r {
 			case '*':
-				b.WriteString(".*")
+				builder.WriteString(".*")
 			case '?':
-				b.WriteString(".")
+				builder.WriteString(".")
 			default:
-				b.WriteString(regexp.QuoteMeta(string(r)))
+				builder.WriteString(regexp.QuoteMeta(string(r)))
 			}
 		}
-		re, err := regexp.Compile(b.String())
+
+		re, err := regexp.Compile(builder.String())
 		if err != nil {
-			return nil, fmt.Errorf("invalid exclude pattern %q: %w", p, err)
+			return nil, fmt.Errorf("invalid exclude pattern %q: %w", pattern, err)
 		}
+
 		out = append(out, re)
 	}
+
 	return out, nil
 }

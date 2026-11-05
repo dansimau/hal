@@ -6,6 +6,8 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const testString = "test"
+
 func TestGetStringOrStringSlice(t *testing.T) {
 	t.Parallel()
 
@@ -21,13 +23,13 @@ func TestGetStringOrStringSlice(t *testing.T) {
 		},
 		{
 			name:     "string input",
-			input:    "test",
-			expected: []string{"test"},
+			input:    testString,
+			expected: []string{testString},
 		},
 		{
 			name:     "string slice input",
-			input:    []string{"test"},
-			expected: []string{"test"},
+			input:    []string{testString},
+			expected: []string{testString},
 		},
 		{
 			name:     "empty string input",
@@ -46,8 +48,8 @@ func TestGetStringOrStringSlice(t *testing.T) {
 		},
 		{
 			name:     "slice with non-string values",
-			input:    []any{1, "test", true},
-			expected: []string{"test"},
+			input:    []any{1, testString, true},
+			expected: []string{testString},
 		},
 		{
 			name:     "unsupported type",
@@ -79,6 +81,7 @@ func TestGetShortFunctionName(t *testing.T) {
 
 	t.Run("extracts function name from function reference", func(t *testing.T) {
 		t.Parallel()
+
 		testFunc := func() {}
 		name := getShortFunctionName(testFunc)
 
@@ -90,13 +93,15 @@ func TestGetShortFunctionName(t *testing.T) {
 
 	t.Run("handles named function", func(t *testing.T) {
 		t.Parallel()
+
 		name := getShortFunctionName(getShortFunctionName)
 		assert.Equal(t, name, "getShortFunctionName")
 	})
 
 	t.Run("handles method", func(t *testing.T) {
 		t.Parallel()
-		light := NewLight("test")
+
+		light := NewLight(testString)
 		name := getShortFunctionName(light.TurnOn)
 		// Method names may have "-fm" suffix in Go runtime
 		assert.Assert(t, name == "TurnOn" || name == "TurnOn-fm")
@@ -108,16 +113,19 @@ func TestGetStringOrStringSliceAdditional(t *testing.T) {
 
 	t.Run("handles boolean input", func(t *testing.T) {
 		t.Parallel()
+
 		result := getStringOrStringSlice(true)
 		assert.DeepEqual(t, result, []string{})
 	})
 
 	t.Run("handles struct input", func(t *testing.T) {
 		t.Parallel()
+
 		type testStruct struct {
 			field string
 		}
-		result := getStringOrStringSlice(testStruct{field: "test"})
+
+		result := getStringOrStringSlice(testStruct{field: testString})
 		assert.DeepEqual(t, result, []string{})
 	})
 }

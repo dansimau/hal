@@ -65,7 +65,7 @@ func TestFindEntitiesNonStruct(t *testing.T) {
 func TestConnectionFindEntities(t *testing.T) {
 	t.Parallel()
 
-	conn := NewConnection(Config{DatabasePath: ":memory:"})
+	conn := NewConnection(Config{DatabasePath: memoryDatabasePath})
 
 	type home struct {
 		Light *Light

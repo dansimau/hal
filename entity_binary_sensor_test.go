@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/dansimau/hal"
-	"github.com/dansimau/hal/homeassistant"
 	"gotest.tools/v3/assert"
 )
 
@@ -18,61 +17,15 @@ func TestNewBinarySensor(t *testing.T) {
 func TestBinarySensor_IsOff(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns true when state is off", func(t *testing.T) {
-		t.Parallel()
-		sensor := hal.NewBinarySensor("binary_sensor.test")
-		state := homeassistant.State{State: "off"}
-		sensor.SetState(state)
-
-		assert.Equal(t, sensor.IsOff(), true)
-	})
-
-	t.Run("returns false when state is on", func(t *testing.T) {
-		t.Parallel()
-		sensor := hal.NewBinarySensor("binary_sensor.test")
-		state := homeassistant.State{State: "on"}
-		sensor.SetState(state)
-
-		assert.Equal(t, sensor.IsOff(), false)
-	})
-
-	t.Run("returns false when state is other value", func(t *testing.T) {
-		t.Parallel()
-		sensor := hal.NewBinarySensor("binary_sensor.test")
-		state := homeassistant.State{State: "unavailable"}
-		sensor.SetState(state)
-
-		assert.Equal(t, sensor.IsOff(), false)
-	})
+	runStateCheckCases(t, func() *hal.BinarySensor {
+		return hal.NewBinarySensor("binary_sensor.test")
+	}, (*hal.BinarySensor).IsOff, isOffCases(stateUnavailable))
 }
 
 func TestBinarySensor_IsOn(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns true when state is on", func(t *testing.T) {
-		t.Parallel()
-		sensor := hal.NewBinarySensor("binary_sensor.test")
-		state := homeassistant.State{State: "on"}
-		sensor.SetState(state)
-
-		assert.Equal(t, sensor.IsOn(), true)
-	})
-
-	t.Run("returns false when state is off", func(t *testing.T) {
-		t.Parallel()
-		sensor := hal.NewBinarySensor("binary_sensor.test")
-		state := homeassistant.State{State: "off"}
-		sensor.SetState(state)
-
-		assert.Equal(t, sensor.IsOn(), false)
-	})
-
-	t.Run("returns false when state is other value", func(t *testing.T) {
-		t.Parallel()
-		sensor := hal.NewBinarySensor("binary_sensor.test")
-		state := homeassistant.State{State: "unknown"}
-		sensor.SetState(state)
-
-		assert.Equal(t, sensor.IsOn(), false)
-	})
+	runStateCheckCases(t, func() *hal.BinarySensor {
+		return hal.NewBinarySensor("binary_sensor.test")
+	}, (*hal.BinarySensor).IsOn, isOnCases("unknown"))
 }

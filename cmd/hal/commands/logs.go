@@ -2,7 +2,9 @@ package commands
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -14,18 +16,37 @@ import (
 	"github.com/hokaccha/go-prettyjson"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
+	"gorm.io/gorm"
 )
 
-// NewLogsCmd creates the logs command
+const (
+	// logsCmdUse is the name of the "logs" subcommand, shared by `hal logs` and
+	// `hal prune logs`.
+	logsCmdUse = "logs"
+
+	// Log level names as stored in the database (slog.Level.String()).
+	levelError = "ERROR"
+	levelWarn  = "WARN"
+	levelInfo  = "INFO"
+	levelDebug = "DEBUG"
+)
+
+// errUnparsableTime is returned when a --from/--to/--before value matches none
+// of the supported time formats.
+var errUnparsableTime = errors.New("unable to parse time")
+
+// NewLogsCmd creates the logs command.
 func NewLogsCmd() *cobra.Command {
-	var fromTime string
-	var toTime string
-	var lastDuration string
-	var entityID string
-	var noColor bool
+	var (
+		fromTime     string
+		toTime       string
+		lastDuration string
+		entityID     string
+		noColor      bool
+	)
 
 	cmd := &cobra.Command{
-		Use:     "logs",
+		Use:     logsCmdUse,
 		Aliases: []string{"log"},
 		Short:   "Display HAL log entries",
 		Long: `Display log entries from the HAL automation system.
@@ -38,8 +59,8 @@ Shows logs in chronological order with optional filtering by time range or entit
   hal logs --last 1h                   # Show logs from last 1 hour
   hal logs --last 1d                   # Show logs from last 1 day
   hal logs --entity-id "light.kitchen" # Show logs for specific entity`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLogsCommand(fromTime, toTime, lastDuration, entityID, noColor)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runLogsCommand(cmd.OutOrStdout(), fromTime, toTime, lastDuration, entityID, noColor)
 		},
 	}
 
@@ -52,7 +73,7 @@ Shows logs in chronological order with optional filtering by time range or entit
 	return cmd
 }
 
-func runLogsCommand(fromTime, toTime, lastDuration, entityID string, noColor bool) error {
+func runLogsCommand(out io.Writer, fromTime, toTime, lastDuration, entityID string, noColor bool) error {
 	// Open database connection using default path
 	db, err := store.Open("sqlite.db")
 	if err != nil {
@@ -60,31 +81,9 @@ func runLogsCommand(fromTime, toTime, lastDuration, entityID string, noColor boo
 	}
 
 	// Build query with filters
-	query := db.Model(&store.Log{})
-
-	// Apply time filters
-	if lastDuration != "" {
-		duration, err := parseDuration(lastDuration)
-		if err != nil {
-			return fmt.Errorf("invalid duration format: %w", err)
-		}
-		since := time.Now().Add(-duration)
-		query = query.Where("timestamp > ?", since)
-	} else {
-		if fromTime != "" {
-			from, err := parseTime(fromTime)
-			if err != nil {
-				return fmt.Errorf("invalid from time format: %w", err)
-			}
-			query = query.Where("timestamp >= ?", from)
-		}
-		if toTime != "" {
-			to, err := parseTime(toTime)
-			if err != nil {
-				return fmt.Errorf("invalid to time format: %w", err)
-			}
-			query = query.Where("timestamp <= ?", to)
-		}
+	query, err := applyTimeFilters(db.Model(&store.Log{}), fromTime, toTime, lastDuration)
+	if err != nil {
+		return err
 	}
 
 	// Apply entity filter
@@ -94,22 +93,60 @@ func runLogsCommand(fromTime, toTime, lastDuration, entityID string, noColor boo
 
 	// Execute query and get results
 	var logs []store.Log
-	if err := query.Order("timestamp ASC").Find(&logs).Error; err != nil {
+
+	err = query.Order("timestamp ASC").Find(&logs).Error
+	if err != nil {
 		return fmt.Errorf("failed to query logs: %w", err)
 	}
 
 	// Print results
-	return printLogs(logs, noColor)
+	return printLogs(out, logs, noColor)
+}
+
+// applyTimeFilters narrows query to the requested time range. --last takes
+// precedence over --from/--to.
+func applyTimeFilters(query *gorm.DB, fromTime, toTime, lastDuration string) (*gorm.DB, error) {
+	if lastDuration != "" {
+		duration, err := parseDuration(lastDuration)
+		if err != nil {
+			return nil, fmt.Errorf("invalid duration format: %w", err)
+		}
+
+		since := time.Now().Add(-duration)
+
+		return query.Where("timestamp > ?", since), nil
+	}
+
+	if fromTime != "" {
+		from, err := parseTime(fromTime)
+		if err != nil {
+			return nil, fmt.Errorf("invalid from time format: %w", err)
+		}
+
+		query = query.Where("timestamp >= ?", from)
+	}
+
+	if toTime != "" {
+		to, err := parseTime(toTime)
+		if err != nil {
+			return nil, fmt.Errorf("invalid to time format: %w", err)
+		}
+
+		query = query.Where("timestamp <= ?", to)
+	}
+
+	return query, nil
 }
 
 func parseDuration(durationStr string) (time.Duration, error) {
 	// Handle common duration formats like 5m, 1h, 2d
-	if strings.HasSuffix(durationStr, "d") {
-		days, err := strconv.Atoi(strings.TrimSuffix(durationStr, "d"))
+	if before, ok := strings.CutSuffix(durationStr, "d"); ok {
+		days, err := strconv.Atoi(before)
 		if err != nil {
 			return 0, err
 		}
-		return time.Duration(days) * 24 * time.Hour, nil
+
+		return time.Duration(days) * day, nil
 	}
 
 	// For other formats (m, h, s), use standard time.ParseDuration
@@ -125,65 +162,53 @@ func parseTime(timeStr string) (time.Time, error) {
 	}
 
 	for _, format := range formats {
-		if t, err := time.Parse(format, timeStr); err == nil {
-			return t, nil
+		parsed, err := time.Parse(format, timeStr)
+		if err == nil {
+			return parsed, nil
 		}
 	}
 
-	return time.Time{}, fmt.Errorf("unable to parse time: %s (expected formats: YYYY-MM-DD, YYYY-MM-DD HH:MM, or YYYY-MM-DD HH:MM:SS)", timeStr)
+	return time.Time{}, fmt.Errorf(
+		"%w: %s (expected formats: YYYY-MM-DD, YYYY-MM-DD HH:MM, or YYYY-MM-DD HH:MM:SS)",
+		errUnparsableTime, timeStr,
+	)
 }
 
-func printLogs(logs []store.Log, noColor bool) error {
+func printLogs(out io.Writer, logs []store.Log, noColor bool) error {
 	if len(logs) == 0 {
-		fmt.Println("No logs found")
+		fmt.Fprintln(out, "No logs found")
+
 		return nil
 	}
 
 	// Determine if colors should be enabled
-	useColor := !noColor && isatty.IsTerminal(os.Stdout.Fd())
+	useColor := !noColor && isTerminal(out)
 	if !useColor {
 		color.NoColor = true
 	}
 
-	// Define color functions
-	darkGrey := color.New(color.FgHiBlack).SprintFunc()
-	red := color.New(color.FgRed).SprintFunc()
-	yellow := color.New(color.FgYellow).SprintFunc()
-	green := color.New(color.FgGreen).SprintFunc()
-
-	// Regex to match tag keys like foo=
-	tagRegex := regexp.MustCompile(`(\w+)=`)
+	colorizer := newLogColorizer()
 
 	// Print logs without header to look like a log file
 	for _, log := range logs {
 		// Format timestamp in dark grey
 		timestamp := log.Timestamp.Format("2006-01-02 15:04:05")
 		if useColor {
-			timestamp = darkGrey(timestamp)
+			timestamp = colorizer.darkGrey(timestamp)
 		}
 
 		// Format log level with appropriate color
 		level := log.Level
 		if useColor {
-			switch level {
-			case "ERROR":
-				level = red(level)
-			case "WARN":
-				level = yellow(level)
-			case "INFO":
-				level = green(level)
-			case "DEBUG":
-				level = darkGrey(level)
-			default:
-				level = darkGrey(level)
-			}
+			level = colorizer.level(level)
 		}
 
 		// Format entity ID in dark grey
 		entityIDStr := ""
+
 		if log.EntityID != "" {
 			if useColor {
-				entityIDStr = fmt.Sprintf(" [%s]", darkGrey(log.EntityID))
+				entityIDStr = fmt.Sprintf(" [%s]", colorizer.darkGrey(log.EntityID))
 			} else {
 				entityIDStr = fmt.Sprintf(" [%s]", log.EntityID)
 			}
@@ -192,45 +217,11 @@ func printLogs(logs []store.Log, noColor bool) error {
 		// Format log text with colorized tags; for multiline entries (e.g. diffs)
 		// colorize the first line's tags and diff lines separately.
 		logText := log.LogText
-		firstLine, rest, hasRest := strings.Cut(logText, "\n")
 		if useColor {
-			firstLine = tagRegex.ReplaceAllStringFunc(firstLine, func(match string) string {
-				return darkGrey(match)
-			})
-			if hasRest {
-				trimmed := strings.TrimSpace(rest)
-				if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
-					// Re-colorise stored plain JSON
-					var v interface{}
-					if err := json.Unmarshal([]byte(rest), &v); err == nil {
-						formatter := prettyjson.NewFormatter()
-						formatter.Indent = 2
-						if b, err := formatter.Marshal(v); err == nil {
-							rest = string(b)
-						}
-					}
-				} else {
-					// Colorise as diff
-					diffLines := strings.Split(rest, "\n")
-					for i, line := range diffLines {
-						switch {
-						case strings.HasPrefix(line, "+"):
-							diffLines[i] = green(line)
-						case strings.HasPrefix(line, "-"):
-							diffLines[i] = red(line)
-						}
-					}
-					rest = strings.Join(diffLines, "\n")
-				}
-			}
-		}
-		if hasRest {
-			logText = firstLine + "\n" + rest
-		} else {
-			logText = firstLine
+			logText = colorizer.text(logText)
 		}
 
-		fmt.Printf("%s %s%s %s\n",
+		fmt.Fprintf(out, "%s %s%s %s\n",
 			timestamp,
 			level,
 			entityIDStr,
@@ -239,4 +230,111 @@ func printLogs(logs []store.Log, noColor bool) error {
 	}
 
 	return nil
+}
+
+// isTerminal reports whether out is an interactive terminal.
+func isTerminal(out io.Writer) bool {
+	file, ok := out.(*os.File)
+
+	return ok && isatty.IsTerminal(file.Fd())
+}
+
+// logColorizer colorizes the parts of a rendered log line.
+type logColorizer struct {
+	darkGrey func(a ...any) string
+	red      func(a ...any) string
+	yellow   func(a ...any) string
+	green    func(a ...any) string
+
+	// tagRegex matches tag keys like foo=
+	tagRegex *regexp.Regexp
+}
+
+func newLogColorizer() *logColorizer {
+	return &logColorizer{
+		darkGrey: color.New(color.FgHiBlack).SprintFunc(),
+		red:      color.New(color.FgRed).SprintFunc(),
+		yellow:   color.New(color.FgYellow).SprintFunc(),
+		green:    color.New(color.FgGreen).SprintFunc(),
+		tagRegex: regexp.MustCompile(`(\w+)=`),
+	}
+}
+
+// level colors a log level name according to its severity.
+func (c *logColorizer) level(level string) string {
+	switch level {
+	case levelError:
+		return c.red(level)
+	case levelWarn:
+		return c.yellow(level)
+	case levelInfo:
+		return c.green(level)
+	case levelDebug:
+		return c.darkGrey(level)
+	default:
+		return c.darkGrey(level)
+	}
+}
+
+// text colorizes the tags on the first line of a log entry and, for multiline
+// entries, the remaining lines as either JSON or a diff.
+func (c *logColorizer) text(logText string) string {
+	firstLine, rest, hasRest := strings.Cut(logText, "\n")
+
+	firstLine = c.tagRegex.ReplaceAllStringFunc(firstLine, func(match string) string {
+		return c.darkGrey(match)
+	})
+
+	if !hasRest {
+		return firstLine
+	}
+
+	return firstLine + "\n" + c.rest(rest)
+}
+
+// rest colorizes the lines after the first: stored plain JSON is re-colorised,
+// anything else is treated as a diff.
+func (c *logColorizer) rest(rest string) string {
+	trimmed := strings.TrimSpace(rest)
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		return c.json(rest)
+	}
+
+	return c.diff(rest)
+}
+
+// json re-colorises stored plain JSON, returning the input unchanged when it
+// does not parse.
+func (c *logColorizer) json(rest string) string {
+	var value any
+
+	err := json.Unmarshal([]byte(rest), &value)
+	if err != nil {
+		return rest
+	}
+
+	formatter := prettyjson.NewFormatter()
+	formatter.Indent = 2
+
+	formatted, err := formatter.Marshal(value)
+	if err != nil {
+		return rest
+	}
+
+	return string(formatted)
+}
+
+// diff colors added lines green and removed lines red.
+func (c *logColorizer) diff(rest string) string {
+	diffLines := strings.Split(rest, "\n")
+	for i, line := range diffLines {
+		switch {
+		case strings.HasPrefix(line, "+"):
+			diffLines[i] = c.green(line)
+		case strings.HasPrefix(line, "-"):
+			diffLines[i] = c.red(line)
+		}
+	}
+
+	return strings.Join(diffLines, "\n")
 }

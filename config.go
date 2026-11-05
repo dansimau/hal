@@ -49,7 +49,9 @@ func LoadConfig() (*Config, error) {
 	}
 
 	config := Config{}
-	if err := yaml.Unmarshal(yamlBytes, &config); err != nil {
+
+	err = yaml.Unmarshal(yamlBytes, &config)
+	if err != nil {
 		return nil, err
 	}
 

@@ -11,7 +11,11 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-const testUserID = "d8e8fca2dc0f896fd7cb4cb0031ba249"
+const (
+	testUserID   = "d8e8fca2dc0f896fd7cb4cb0031ba249"
+	testToken    = "test-token"
+	testEntityID = "light.test"
+)
 
 // newTestClient creates a mock server and a client configured to reach it. The
 // client is NOT connected yet, so callers can set up callbacks (e.g.
@@ -19,7 +23,7 @@ const testUserID = "d8e8fca2dc0f896fd7cb4cb0031ba249"
 func newTestClient(t *testing.T, cfg ClientConfig) (*Client, *Server) {
 	t.Helper()
 
-	server, err := NewServer(map[string]string{"test-token": testUserID})
+	server, err := NewServer(map[string]string{testToken: testUserID})
 	assert.NilError(t, err)
 
 	t.Cleanup(func() { _ = server.Close() })
@@ -29,7 +33,7 @@ func newTestClient(t *testing.T, cfg ClientConfig) (*Client, *Server) {
 	}
 
 	if cfg.Token == "" {
-		cfg.Token = "test-token"
+		cfg.Token = testToken
 	}
 
 	return NewClient(cfg), server
@@ -99,8 +103,8 @@ func TestCallServiceNotConnected(t *testing.T) {
 	_, err := c.CallService(CallServiceRequest{
 		Type:    MessageTypeCallService,
 		Domain:  "light",
-		Service: "turn_on",
-		Data:    map[string]any{"entity_id": []string{"light.test"}},
+		Service: serviceTurnOn,
+		Data:    map[string]any{serviceDataEntityID: []string{testEntityID}},
 	})
 	assert.ErrorIs(t, err, ErrNotConnected)
 }
@@ -172,6 +176,7 @@ func TestReadMessageFromChannel(t *testing.T) {
 		t.Parallel()
 
 		c := NewClient(ClientConfig{})
+
 		ch := make(chan []byte, 1)
 		ch <- []byte("hello")
 
@@ -224,7 +229,7 @@ func TestConnectDialError(t *testing.T) {
 	t.Parallel()
 
 	// Nothing listening on this address, so the dial fails.
-	client := NewClient(ClientConfig{Host: "127.0.0.1:1", Token: "test-token"})
+	client := NewClient(ClientConfig{Host: "127.0.0.1:1", Token: testToken})
 
 	err := client.Connect()
 	assert.Assert(t, err != nil)
@@ -255,8 +260,8 @@ func TestCallService(t *testing.T) {
 	resp, err := client.CallService(CallServiceRequest{
 		Type:    MessageTypeCallService,
 		Domain:  "light",
-		Service: "turn_on",
-		Data:    map[string]any{"entity_id": []string{"light.test"}},
+		Service: serviceTurnOn,
+		Data:    map[string]any{serviceDataEntityID: []string{testEntityID}},
 	})
 	assert.NilError(t, err)
 	assert.Equal(t, resp.Success, true)
@@ -300,6 +305,7 @@ func TestSubscribeEvents(t *testing.T) {
 
 	err := client.SubscribeEvents("", func(m EventMessage) {
 		mu.Lock()
+
 		received = append(received, m)
 		mu.Unlock()
 	})
@@ -312,7 +318,7 @@ func TestSubscribeEvents(t *testing.T) {
 	server.SendEvent(homeassistant.Event{
 		EventType: "state_changed",
 		EventData: homeassistant.EventData{
-			EntityID: "light.test",
+			EntityID: testEntityID,
 			NewState: &homeassistant.State{State: "on"},
 		},
 	})
@@ -327,7 +333,7 @@ func TestSubscribeEvents(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	assert.Equal(t, received[0].Event.EventData.EntityID, "light.test")
+	assert.Equal(t, received[0].Event.EventData.EntityID, testEntityID)
 }
 
 func TestSubscribeEventsRaw(t *testing.T) {
@@ -343,6 +349,7 @@ func TestSubscribeEventsRaw(t *testing.T) {
 
 	err := client.SubscribeEventsRaw("", func(b []byte) {
 		mu.Lock()
+
 		received = append(received, b)
 		mu.Unlock()
 	})
@@ -355,7 +362,7 @@ func TestSubscribeEventsRaw(t *testing.T) {
 	server.SendEvent(homeassistant.Event{
 		EventType: "state_changed",
 		EventData: homeassistant.EventData{
-			EntityID: "light.test",
+			EntityID: testEntityID,
 			NewState: &homeassistant.State{State: "on"},
 		},
 	})
@@ -370,7 +377,7 @@ func TestSubscribeEventsRaw(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	assert.Assert(t, bytes.Contains(received[0], []byte("light.test")))
+	assert.Assert(t, bytes.Contains(received[0], []byte(testEntityID)))
 }
 
 // TestHeartbeatKeepsConnectionAlive verifies that the heartbeat pings (and the
@@ -413,9 +420,7 @@ func TestStaleConnectionTriggersDisconnect(t *testing.T) {
 
 	t.Cleanup(func() { _ = client.Close() })
 
-	waitForCond(t, "disconnect on stale connection", func() bool {
-		return disconnected.Load()
-	})
+	waitForCond(t, "disconnect on stale connection", disconnected.Load)
 
 	assert.Equal(t, client.getState(), stateDisconnected)
 }
@@ -437,9 +442,7 @@ func TestForcedDisconnect(t *testing.T) {
 
 	assert.NilError(t, server.DisconnectClient())
 
-	waitForCond(t, "disconnect detected", func() bool {
-		return disconnected.Load()
-	})
+	waitForCond(t, "disconnect detected", disconnected.Load)
 
 	assert.Equal(t, client.getState(), stateDisconnected)
 }
@@ -459,9 +462,7 @@ func TestGracefulServerClose(t *testing.T) {
 
 	assert.NilError(t, server.Close())
 
-	waitForCond(t, "disconnect after graceful close", func() bool {
-		return disconnected.Load()
-	})
+	waitForCond(t, "disconnect after graceful close", disconnected.Load)
 
 	assert.Equal(t, client.getState(), stateDisconnected)
 }

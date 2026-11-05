@@ -40,7 +40,7 @@ func TestButton_Action(t *testing.T) {
 
 		button := hal.NewButton("event.button")
 		button.SetState(homeassistant.State{
-			Attributes: map[string]any{"event_type": "long_press"},
+			Attributes: map[string]any{attrEventType: "long_press"},
 		})
 
 		button.Action(button)
@@ -53,7 +53,7 @@ func TestButton_Action(t *testing.T) {
 
 		button := hal.NewButton("event.button")
 		button.SetState(homeassistant.State{
-			Attributes: map[string]any{"event_type": "initial_press"},
+			Attributes: map[string]any{attrEventType: "initial_press"},
 		})
 
 		button.Action(button)
@@ -66,7 +66,7 @@ func TestButton_Action(t *testing.T) {
 
 		button := hal.NewButton("event.button")
 		button.SetState(homeassistant.State{
-			Attributes: map[string]any{"event_type": "initial_press"},
+			Attributes: map[string]any{attrEventType: "initial_press"},
 		})
 
 		button.Action(button)

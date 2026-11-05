@@ -11,16 +11,18 @@ import (
 // TestHeartbeatKeepsConnectionAlive verifies that heartbeat pings keep the
 // connection alive during a quiet period with no state change events, i.e. the
 // read timeout does not trip as long as pong responses keep arriving.
+//
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestHeartbeatKeepsConnectionAlive(t *testing.T) {
 	conn, server, cleanup := newClientServerWithConfig(t, Config{
-		DatabasePath:      ":memory:",
-		ReconnectInterval: 100 * time.Millisecond,
+		DatabasePath:      memoryDatabasePath,
+		ReconnectInterval: fastReconnectInterval,
 		PingInterval:      50 * time.Millisecond,
 		ReadTimeout:       300 * time.Millisecond,
 	})
 	defer cleanup()
 
-	testEntity := NewEntity("test.entity")
+	testEntity := NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	// Wait well beyond the read timeout with no events. Because the server
@@ -33,16 +35,16 @@ func TestHeartbeatKeepsConnectionAlive(t *testing.T) {
 	// Connection should still be functional.
 	server.SendEvent(homeassistant.Event{
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
+			EntityID: testEntityID,
 			NewState: &homeassistant.State{
-				EntityID: "test.entity",
-				State:    "on",
+				EntityID: testEntityID,
+				State:    stateOn,
 			},
 		},
 	})
 
 	waitFor(t, "event received after quiet period", func() bool {
-		return testEntity.GetState().State == "on"
+		return testEntity.GetState().State == stateOn
 	}, func() {
 		t.Logf("Entity state: %v", testEntity.GetState())
 	})
@@ -51,16 +53,18 @@ func TestHeartbeatKeepsConnectionAlive(t *testing.T) {
 // TestStaleConnectionTriggersReconnect verifies that a "stuck" connection (one
 // that remains open but stops delivering data) is detected via the read timeout
 // and triggers a reconnection.
+//
+//nolint:paralleltest // NewConnection sets the global logger database
 func TestStaleConnectionTriggersReconnect(t *testing.T) {
 	conn, server, cleanup := newClientServerWithConfig(t, Config{
-		DatabasePath:      ":memory:",
-		ReconnectInterval: 100 * time.Millisecond,
+		DatabasePath:      memoryDatabasePath,
+		ReconnectInterval: fastReconnectInterval,
 		PingInterval:      50 * time.Millisecond,
 		ReadTimeout:       200 * time.Millisecond,
 	})
 	defer cleanup()
 
-	testEntity := NewEntity("test.entity")
+	testEntity := NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	// Simulate a stuck connection: the socket stays open but the server stops
@@ -74,13 +78,13 @@ func TestStaleConnectionTriggersReconnect(t *testing.T) {
 	server.SetRespondToPings(true)
 
 	// Wait for the subscription to be re-established, then verify events flow.
-	waitForEventSubscription(t, server, 1)
+	waitForEventSubscription(t, server)
 
 	server.SendEvent(homeassistant.Event{
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
+			EntityID: testEntityID,
 			NewState: &homeassistant.State{
-				EntityID: "test.entity",
+				EntityID: testEntityID,
 				State:    "recovered",
 			},
 		},

@@ -13,6 +13,13 @@ import (
 	"github.com/davecgh/go-spew/spew"
 )
 
+const (
+	// stateOff is the Home Assistant state of an entity that is off.
+	stateOff = "off"
+	// attrBrightness is the light attribute holding the brightness.
+	attrBrightness = "brightness"
+)
+
 func TestSensorTurnOnTurnOff(t *testing.T) {
 	t.Parallel()
 
@@ -42,7 +49,7 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -62,18 +69,18 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 	// Clear motion sensor
 	slog.Info("Test: Clearing motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
@@ -84,7 +91,7 @@ func TestSensorTurnOnTurnOff(t *testing.T) {
 	// Verify light is off
 	slog.Info("Test: Asserting light is off")
 	testutil.WaitFor(t, "verify light is off", func() bool {
-		return testLight.GetState().State == "off"
+		return testLight.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
@@ -120,7 +127,7 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -140,18 +147,18 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 	// Clear motion sensor
 	slog.Info("Test: Clearing motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
@@ -161,9 +168,9 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 
 	slog.Info("Test: Asserting light was dimmed")
 	testutil.WaitFor(t, "verify light was dimmed", func() bool {
-		return testLight.GetState().Attributes["brightness"] == 50.0
+		return testLight.GetState().Attributes[attrBrightness] == 50.0
 	}, func() {
-		spew.Dump(testLight.GetID(), testLight.GetState(), testLight.GetState().Attributes["brightness"])
+		spew.Dump(testLight.GetID(), testLight.GetState(), testLight.GetState().Attributes[attrBrightness])
 	})
 
 	slog.Info("Test: Advancing time")
@@ -172,7 +179,7 @@ func TestSensorTurnOnTurnOffWithDimming(t *testing.T) {
 	// Verify light is off
 	slog.Info("Test: Asserting light is off")
 	testutil.WaitFor(t, "verify light is off", func() bool {
-		return testLight.GetState().State == "off"
+		return testLight.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
@@ -208,7 +215,7 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -228,18 +235,18 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 	// Clear motion sensor
 	slog.Info("Test: Clearing motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
@@ -249,15 +256,15 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 
 	slog.Info("Test: Asserting light was dimmed")
 	testutil.WaitFor(t, "verify light was dimmed", func() bool {
-		return testLight.GetState().Attributes["brightness"] == 50.0
+		return testLight.GetState().Attributes[attrBrightness] == 50.0
 	}, func() {
-		spew.Dump(testLight.GetID(), testLight.GetState(), testLight.GetState().Attributes["brightness"])
+		spew.Dump(testLight.GetID(), testLight.GetState(), testLight.GetState().Attributes[attrBrightness])
 	})
 
 	// Trigger motion sensor again
 	slog.Info("Test: Triggering motion sensor again")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -270,7 +277,7 @@ func TestSensorLightsTurnOnAfterDimming(t *testing.T) {
 	// Verify light is bright again
 	slog.Info("Test: Asserting light is bright again")
 	testutil.WaitFor(t, "verify light is bright again", func() bool {
-		return testLight.GetState().Attributes["brightness"] == 100.0
+		return testLight.GetState().Attributes[attrBrightness] == 100.0
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
@@ -307,7 +314,7 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -327,14 +334,14 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 	// Light was dimmed manually
 	slog.Info("Test: Dimming light manually")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testLight.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testLight.GetID(),
 				State:    "on",
 				Attributes: map[string]any{
-					"brightness": 75.0,
+					attrBrightness: 75.0,
 				},
 			},
 		},
@@ -343,7 +350,7 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor again")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -365,7 +372,7 @@ func TestSensorDoesntOverrideManuallySetBrightness(t *testing.T) {
 	// Verify light is the same
 	slog.Info("Test: Asserting light is in the same state")
 	testutil.WaitFor(t, "verify light is in the same state", func() bool {
-		return testLight.GetState().Attributes["brightness"] == 75.0
+		return testLight.GetState().Attributes[attrBrightness] == 75.0
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
@@ -401,7 +408,7 @@ func TestHumanOverride(t *testing.T) {
 	// Trigger motion sensor
 	slog.Info("Test: Triggering motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -421,7 +428,7 @@ func TestHumanOverride(t *testing.T) {
 	// Human presses button manually, triggering human override
 	slog.Info("Test: Light set manually")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testLight.GetID(),
 			NewState: &homeassistant.State{
@@ -434,18 +441,18 @@ func TestHumanOverride(t *testing.T) {
 	// Motion sensor is cleared, but it should be ignored because of human override
 	slog.Info("Test: Clearing motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
@@ -468,7 +475,7 @@ func TestHumanOverride(t *testing.T) {
 	// Trigger motion sensor is triggered and cleared again
 	slog.Info("Test: Triggering motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -486,18 +493,18 @@ func TestHumanOverride(t *testing.T) {
 
 	slog.Info("Test: Clearing motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
@@ -508,7 +515,7 @@ func TestHumanOverride(t *testing.T) {
 	// Verify light is off
 	slog.Info("Test: Asserting light is off")
 	testutil.WaitFor(t, "verify light is off", func() bool {
-		return testLight.GetState().State == "off"
+		return testLight.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
@@ -540,7 +547,7 @@ func TestSensorTurnOffCooldown(t *testing.T) {
 
 	slog.Info("Test: Triggering motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -560,18 +567,18 @@ func TestSensorTurnOffCooldown(t *testing.T) {
 	// connection treats it as external and runs handleLightStateChanged).
 	slog.Info("Test: Human turns light off")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testLight.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testLight.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "verify light is off", func() bool {
-		return testLight.GetState().State == "off"
+		return testLight.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
@@ -579,25 +586,25 @@ func TestSensorTurnOffCooldown(t *testing.T) {
 	// Clear and re-trigger sensor during cooldown — light must stay off.
 	slog.Info("Test: Clearing motion sensor")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
 
 	slog.Info("Test: Re-triggering motion sensor during cooldown")
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -615,25 +622,25 @@ func TestSensorTurnOffCooldown(t *testing.T) {
 
 	slog.Info("Test: Asserting light stays off during cooldown")
 	testutil.WaitFor(t, "verify light is still off during cooldown", func() bool {
-		return testLight.GetState().State == "off"
+		return testLight.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
 
 	// Clear sensor, advance past cooldown, re-trigger — light should turn on.
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared again", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
@@ -642,7 +649,7 @@ func TestSensorTurnOffCooldown(t *testing.T) {
 	mockClock.Add(11 * time.Second)
 
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -684,7 +691,7 @@ func TestSensorTurnOffCooldownDisabled(t *testing.T) {
 	conn.RegisterAutomations(automation)
 
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
@@ -702,18 +709,18 @@ func TestSensorTurnOffCooldownDisabled(t *testing.T) {
 
 	// Human turns light off.
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testLight.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testLight.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "verify light is off", func() bool {
-		return testLight.GetState().State == "off"
+		return testLight.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
@@ -721,24 +728,24 @@ func TestSensorTurnOffCooldownDisabled(t *testing.T) {
 	// Clear and re-trigger sensor — with cooldown disabled, the light should
 	// turn back on immediately.
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{
 				EntityID: testSensor.GetID(),
-				State:    "off",
+				State:    stateOff,
 			},
 		},
 	})
 
 	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
-		return testSensor.GetState().State == "off"
+		return testSensor.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testSensor.GetID(), testSensor.GetState())
 	})
 
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
 			EntityID: testSensor.GetID(),
 			NewState: &homeassistant.State{

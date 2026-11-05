@@ -2,9 +2,9 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"math"
-	"os"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -14,12 +14,24 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	// day and month are the lengths of the longer reporting windows.
+	day   = 24 * time.Hour
+	month = 30 * day
+
+	// p99Quantile is the quantile reported for timer metrics.
+	p99Quantile = 0.99
+
+	// tablePadding is the number of spaces between tabwriter columns.
+	tablePadding = 2
+)
+
 type MetricSummary struct {
 	MetricType store.MetricType
-	LastMinute interface{}
-	LastHour   interface{}
-	LastDay    interface{}
-	LastMonth  interface{}
+	LastMinute any
+	LastHour   any
+	LastDay    any
+	LastMonth  any
 }
 
 type TimePeriod struct {
@@ -27,7 +39,7 @@ type TimePeriod struct {
 	Duration time.Duration
 }
 
-// NewStatsCmd creates the stats command
+// NewStatsCmd creates the stats command.
 func NewStatsCmd() *cobra.Command {
 	var dbPath string
 
@@ -39,16 +51,17 @@ func NewStatsCmd() *cobra.Command {
 Shows automation triggers, evaluations, and processing times across multiple time periods.`,
 		Example: `  hal stats                    # Show stats using default database
   hal stats --db custom.db     # Show stats from custom database`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatsCommand(dbPath)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runStatsCommand(cmd.OutOrStdout(), dbPath)
 		},
 	}
 
 	cmd.Flags().StringVar(&dbPath, "db", "sqlite.db", "Database file path")
+
 	return cmd
 }
 
-func runStatsCommand(dbPath string) error {
+func runStatsCommand(out io.Writer, dbPath string) error {
 	// Open database connection
 	db, err := store.Open(dbPath)
 	if err != nil {
@@ -70,21 +83,21 @@ func runStatsCommand(dbPath string) error {
 			// Timer metrics - calculate p99
 			summary.LastMinute = calculateP99(db.DB, metricType, time.Minute)
 			summary.LastHour = calculateP99(db.DB, metricType, time.Hour)
-			summary.LastDay = calculateP99(db.DB, metricType, 24*time.Hour)
-			summary.LastMonth = calculateP99(db.DB, metricType, 30*24*time.Hour)
+			summary.LastDay = calculateP99(db.DB, metricType, day)
+			summary.LastMonth = calculateP99(db.DB, metricType, month)
 		} else {
 			// Counter metrics - sum
 			summary.LastMinute = sumMetrics(db.DB, metricType, time.Minute)
 			summary.LastHour = sumMetrics(db.DB, metricType, time.Hour)
-			summary.LastDay = sumMetrics(db.DB, metricType, 24*time.Hour)
-			summary.LastMonth = sumMetrics(db.DB, metricType, 30*24*time.Hour)
+			summary.LastDay = sumMetrics(db.DB, metricType, day)
+			summary.LastMonth = sumMetrics(db.DB, metricType, month)
 		}
 
 		summaries = append(summaries, summary)
 	}
 
 	// Print results in table format
-	return printTable(summaries)
+	return printTable(out, summaries)
 }
 
 // sumMetrics returns the total count of a counter metric over the given window.
@@ -103,6 +116,7 @@ func sumMetrics(db *gorm.DB, metricType store.MetricType, duration time.Duration
 	var rollup struct {
 		Total int64
 	}
+
 	db.Model(&store.MetricRollup{}).
 		Select("COALESCE(SUM(count), 0) as total").
 		Where("metric_type = ? AND bucket_start > ?", metricType, since.Unix()).
@@ -116,6 +130,7 @@ func rawSum(db *gorm.DB, metricType store.MetricType, since time.Time) int64 {
 	var result struct {
 		Total int64
 	}
+
 	db.Model(&store.Metric{}).
 		Select("COALESCE(SUM(value), 0) as total").
 		Where("metric_type = ? AND timestamp >= ?", metricType, since).
@@ -134,6 +149,7 @@ func rawTailStart(db *gorm.DB, metricType store.MetricType, since time.Time) tim
 	var result struct {
 		Max *int64
 	}
+
 	db.Model(&store.MetricRollup{}).
 		Select("MAX(bucket_start) as max").
 		Where("metric_type = ? AND bucket_start > ?", metricType, since.Unix()).
@@ -155,6 +171,7 @@ func rawTailStart(db *gorm.DB, metricType store.MetricType, since time.Time) tim
 func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Duration) string {
 	if duration <= time.Minute {
 		since := time.Now().Add(-duration)
+
 		var values []int64
 
 		db.Model(&store.Metric{}).
@@ -166,19 +183,15 @@ func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Durati
 			return "0ms"
 		}
 
-		sort.Slice(values, func(i, j int) bool {
-			return values[i] < values[j]
-		})
+		slices.Sort(values)
 
-		index := int(math.Ceil(float64(len(values))*0.99)) - 1
-		if index < 0 {
-			index = 0
-		}
+		index := max(int(math.Ceil(float64(len(values))*p99Quantile))-1, 0)
 
 		return formatDuration(time.Duration(values[index]))
 	}
 
 	since := time.Now().Add(-duration)
+
 	var rollups []store.MetricRollup
 
 	db.Model(&store.MetricRollup{}).
@@ -193,15 +206,17 @@ func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Durati
 
 	// Supplement with raw points not yet captured in a rollup.
 	var rawValues []int64
+
 	db.Model(&store.Metric{}).
 		Select("value").
 		Where("metric_type = ? AND timestamp >= ?", metricType, rawTailStart(db, metricType, since)).
 		Scan(&rawValues)
+
 	for _, v := range rawValues {
 		merged[store.HistogramBucket(v)]++
 	}
 
-	p99 := store.HistogramQuantile(merged, 0.99)
+	p99 := store.HistogramQuantile(merged, p99Quantile)
 	if p99 == 0 {
 		return "0ms"
 	}
@@ -210,13 +225,14 @@ func calculateP99(db *gorm.DB, metricType store.MetricType, duration time.Durati
 }
 
 func formatDuration(d time.Duration) string {
-	if d < time.Microsecond {
+	switch {
+	case d < time.Microsecond:
 		return fmt.Sprintf("%.0fns", float64(d))
-	} else if d < time.Millisecond {
+	case d < time.Millisecond:
 		return fmt.Sprintf("%.1fμs", float64(d)/float64(time.Microsecond))
-	} else if d < time.Second {
+	case d < time.Second:
 		return fmt.Sprintf("%.1fms", float64(d)/float64(time.Millisecond))
-	} else {
+	default:
 		return fmt.Sprintf("%.2fs", d.Seconds())
 	}
 }
@@ -232,8 +248,8 @@ func formatMetricType(metricType store.MetricType) string {
 	}
 }
 
-func printTable(summaries []MetricSummary) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+func printTable(out io.Writer, summaries []MetricSummary) error {
+	w := tabwriter.NewWriter(out, 0, 0, tablePadding, ' ', 0)
 	defer w.Flush()
 
 	// Print header

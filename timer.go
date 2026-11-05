@@ -16,8 +16,10 @@ type Timer struct {
 	clock   clock.Clock
 	timer   *clock.Timer
 	running bool
-	ctx     context.Context
-	fn      func(context.Context)
+	// ctx is the context for the pending callback; fire passes it through to
+	// fn so a Reset picks up the context given to the latest StartContext.
+	ctx context.Context //nolint:containedctx // context is stored for the pending callback
+	fn  func(context.Context)
 }
 
 func NewTimer(clock clock.Clock) *Timer {
@@ -38,7 +40,7 @@ func (t *Timer) Cancel() {
 	t.running = false
 }
 
-// StartContext starts a timer with context that will be passed to the callback
+// StartContext starts a timer with context that will be passed to the callback.
 func (t *Timer) StartContext(ctx context.Context, fn func(context.Context), duration time.Duration) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
@@ -61,20 +63,8 @@ func (t *Timer) StartContext(ctx context.Context, fn func(context.Context), dura
 	t.running = true
 }
 
-// fire runs when the timer expires. It reads the most recently configured
-// callback and context under the lock so a Reset takes effect.
-func (t *Timer) fire() {
-	t.mutex.Lock()
-	t.running = false
-	fn, ctx := t.fn, t.ctx
-	t.mutex.Unlock()
-
-	if fn != nil {
-		fn(ctx)
-	}
-}
-
 // Start starts the timer or resets it to a new duration.
+//
 // Deprecated: Use StartContext to propagate context for tracing.
 func (t *Timer) Start(fn func(), duration time.Duration) {
 	t.StartContext(context.Background(), func(context.Context) {
@@ -90,4 +80,17 @@ func (t *Timer) IsRunning() bool {
 	defer t.mutex.Unlock()
 
 	return t.running
+}
+
+// fire runs when the timer expires. It reads the most recently configured
+// callback and context under the lock so a Reset takes effect.
+func (t *Timer) fire() {
+	t.mutex.Lock()
+	t.running = false
+	fn, ctx := t.fn, t.ctx
+	t.mutex.Unlock()
+
+	if fn != nil {
+		fn(ctx)
+	}
 }

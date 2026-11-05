@@ -2,8 +2,6 @@ package commands
 
 import (
 	"bytes"
-	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,22 +20,9 @@ func setupTestDBForStats(t *testing.T) *store.Store {
 	return db
 }
 
-func captureOutput(f func()) string {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	f()
-
-	w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	return buf.String()
-}
-
 func TestNewStatsCmd(t *testing.T) {
+	t.Parallel()
+
 	cmd := NewStatsCmd()
 
 	assert.Equal(t, cmd.Use, "stats")
@@ -48,6 +33,8 @@ func TestNewStatsCmd(t *testing.T) {
 }
 
 func TestStatsCommandWithEmptyDatabase(t *testing.T) {
+	t.Parallel()
+
 	// Create temporary database file for testing
 	tempFile := t.TempDir() + "/test.db"
 	tempDB, err := store.Open(tempFile)
@@ -59,10 +46,11 @@ func TestStatsCommandWithEmptyDatabase(t *testing.T) {
 	sqlDB.Close()
 
 	// Capture output
-	output := captureOutput(func() {
-		err := runStatsCommand(tempFile)
-		assert.NilError(t, err)
-	})
+	var out bytes.Buffer
+
+	assert.NilError(t, runStatsCommand(&out, tempFile))
+
+	output := out.String()
 
 	// Verify expected output format
 	lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -79,6 +67,8 @@ func TestStatsCommandWithEmptyDatabase(t *testing.T) {
 }
 
 func TestStatsCommandWithSampleData(t *testing.T) {
+	t.Parallel()
+
 	// Create temporary database file
 	tempFile := t.TempDir() + "/test_with_data.db"
 	db, err := store.Open(tempFile)
@@ -120,10 +110,11 @@ func TestStatsCommandWithSampleData(t *testing.T) {
 	sqlDB.Close()
 
 	// Capture output
-	output := captureOutput(func() {
-		err := runStatsCommand(tempFile)
-		assert.NilError(t, err)
-	})
+	var out bytes.Buffer
+
+	assert.NilError(t, runStatsCommand(&out, tempFile))
+
+	output := out.String()
 
 	// Verify output contains expected data
 	assert.Assert(t, strings.Contains(output, "Automations Triggered"))
@@ -138,8 +129,10 @@ func TestStatsCommandWithSampleData(t *testing.T) {
 		if strings.Contains(line, "Automations Triggered") {
 			foundTriggerLine = true
 			// Should show 1 trigger in last minute - check for any non-zero number
-			assert.Assert(t, strings.Contains(line, "1") || strings.Contains(line, "2"), "Expected trigger count in line: %s", line)
+			assert.Assert(t, strings.Contains(line, "1") || strings.Contains(line, "2"),
+				"Expected trigger count in line: %s", line)
 		}
+
 		if strings.Contains(line, "Tick Processing Time") {
 			foundTimeLine = true
 			// Should show processing time in milliseconds
@@ -152,6 +145,8 @@ func TestStatsCommandWithSampleData(t *testing.T) {
 }
 
 func TestFormatDuration(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		duration time.Duration
 		expected string
@@ -171,6 +166,8 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestFormatMetricType(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		metricType store.MetricType
 		expected   string
@@ -187,6 +184,8 @@ func TestFormatMetricType(t *testing.T) {
 }
 
 func TestSumMetrics(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDBForStats(t)
 
 	now := time.Now()
@@ -201,8 +200,16 @@ func TestSumMetrics(t *testing.T) {
 
 	// Rollups cover older minutes within the window: two buckets totalling 3.
 	rollups := []store.MetricRollup{
-		{MetricType: store.MetricTypeAutomationTriggered, BucketStart: now.Add(-2 * time.Minute).Truncate(time.Minute).Unix(), Count: 2, Sum: 2, Histogram: map[int32]int64{0: 2}},
-		{MetricType: store.MetricTypeAutomationTriggered, BucketStart: now.Add(-3 * time.Minute).Truncate(time.Minute).Unix(), Count: 1, Sum: 1, Histogram: map[int32]int64{0: 1}},
+		{
+			MetricType:  store.MetricTypeAutomationTriggered,
+			BucketStart: now.Add(-2 * time.Minute).Truncate(time.Minute).Unix(),
+			Count:       2, Sum: 2, Histogram: map[int32]int64{0: 2},
+		},
+		{
+			MetricType:  store.MetricTypeAutomationTriggered,
+			BucketStart: now.Add(-3 * time.Minute).Truncate(time.Minute).Unix(),
+			Count:       1, Sum: 1, Histogram: map[int32]int64{0: 1},
+		},
 	}
 	for _, r := range rollups {
 		assert.NilError(t, db.Create(&r).Error)
@@ -219,6 +226,8 @@ func TestSumMetrics(t *testing.T) {
 }
 
 func TestSumMetricsFallsBackToRawWithoutRollups(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDBForStats(t)
 
 	now := time.Now()
@@ -237,6 +246,8 @@ func TestSumMetricsFallsBackToRawWithoutRollups(t *testing.T) {
 }
 
 func TestCalculateP99FromRollups(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDBForStats(t)
 
 	now := time.Now()
@@ -247,8 +258,16 @@ func TestCalculateP99FromRollups(t *testing.T) {
 	// of the 199 samples (nearest-rank 198th) falls in the 90ms bucket, so the
 	// window p99 is a true quantile of the underlying distribution.
 	rollups := []store.MetricRollup{
-		{MetricType: store.MetricTypeTickProcessingTime, BucketStart: now.Add(-2 * time.Minute).Truncate(time.Minute).Unix(), Count: 99, Sum: tenMs * 99, Histogram: map[int32]int64{store.HistogramBucket(tenMs): 99}},
-		{MetricType: store.MetricTypeTickProcessingTime, BucketStart: now.Add(-3 * time.Minute).Truncate(time.Minute).Unix(), Count: 100, Sum: ninetyMs * 100, Histogram: map[int32]int64{store.HistogramBucket(ninetyMs): 100}},
+		{
+			MetricType:  store.MetricTypeTickProcessingTime,
+			BucketStart: now.Add(-2 * time.Minute).Truncate(time.Minute).Unix(),
+			Count:       99, Sum: tenMs * 99, Histogram: map[int32]int64{store.HistogramBucket(tenMs): 99},
+		},
+		{
+			MetricType:  store.MetricTypeTickProcessingTime,
+			BucketStart: now.Add(-3 * time.Minute).Truncate(time.Minute).Unix(),
+			Count:       100, Sum: ninetyMs * 100, Histogram: map[int32]int64{store.HistogramBucket(ninetyMs): 100},
+		},
 	}
 	for _, r := range rollups {
 		assert.NilError(t, db.Create(&r).Error)
@@ -264,6 +283,8 @@ func TestCalculateP99FromRollups(t *testing.T) {
 }
 
 func TestCalculateP99IncludesRawTail(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDBForStats(t)
 
 	now := time.Now()
@@ -295,6 +316,8 @@ func TestCalculateP99IncludesRawTail(t *testing.T) {
 }
 
 func TestCalculateP99(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDBForStats(t)
 
 	now := time.Now()
@@ -324,6 +347,8 @@ func TestCalculateP99(t *testing.T) {
 }
 
 func TestCalculateP99EmptyDataset(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDBForStats(t)
 
 	// Test with empty dataset
@@ -332,6 +357,8 @@ func TestCalculateP99EmptyDataset(t *testing.T) {
 }
 
 func TestStatsCommandCobraIntegration(t *testing.T) {
+	t.Parallel()
+
 	cmd := NewStatsCmd()
 
 	// Test that command can be executed (though it may fail due to missing database)

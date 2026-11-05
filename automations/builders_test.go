@@ -36,8 +36,8 @@ func TestSensorLightsBuilders(t *testing.T) {
 		TurnsOnLights(onLight).
 		TurnsOffLights(offLight).
 		WithCondition(func() bool { return true }).
-		WithConditionScene(func() bool { return false }, map[string]any{"brightness": 10}).
-		SetScene(map[string]any{"brightness": 200})
+		WithConditionScene(func() bool { return false }, map[string]any{attrBrightness: 10}).
+		SetScene(map[string]any{attrBrightness: 200})
 
 	assert.Equal(t, a.Name(), "test")
 

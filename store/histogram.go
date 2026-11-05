@@ -16,7 +16,10 @@ import (
 // gamma = (1+a)/(1-a) with a = 0.02 gives a relative accuracy of ~2%.
 const HistogramGamma = 1.0408163265306123
 
-var histogramLogGamma = math.Log(HistogramGamma)
+// histogramLogGamma returns the natural logarithm of HistogramGamma.
+func histogramLogGamma() float64 {
+	return math.Log(HistogramGamma)
+}
 
 // HistogramBucket returns the histogram bucket index for a value. Values below 1
 // are clamped to bucket 0 (they are not meaningful for the nanosecond timings we
@@ -26,7 +29,7 @@ func HistogramBucket(value int64) int32 {
 		return 0
 	}
 
-	return int32(math.Ceil(math.Log(float64(value)) / histogramLogGamma))
+	return int32(math.Ceil(math.Log(float64(value)) / histogramLogGamma()))
 }
 
 // HistogramValue returns a representative value for a bucket index: the midpoint
@@ -39,6 +42,7 @@ func HistogramValue(bucket int32) int64 {
 // MergeHistograms sums a set of per-bucket histograms into a single histogram.
 func MergeHistograms(histograms ...map[int32]int64) map[int32]int64 {
 	merged := make(map[int32]int64)
+
 	for _, h := range histograms {
 		for bucket, count := range h {
 			merged[bucket] += count
@@ -48,10 +52,11 @@ func MergeHistograms(histograms ...map[int32]int64) map[int32]int64 {
 	return merged
 }
 
-// HistogramQuantile returns the q-th quantile (0 < q <= 1) of the samples
-// summarised by a merged histogram, using the nearest-rank method. The result is
-// accurate to within HistogramGamma relative error of the true quantile.
-func HistogramQuantile(counts map[int32]int64, q float64) int64 {
+// HistogramQuantile returns the quantile-th quantile (0 < quantile <= 1) of the
+// samples summarised by a merged histogram, using the nearest-rank method. The
+// result is accurate to within HistogramGamma relative error of the true
+// quantile.
+func HistogramQuantile(counts map[int32]int64, quantile float64) int64 {
 	var total int64
 	for _, c := range counts {
 		total += c
@@ -65,9 +70,10 @@ func HistogramQuantile(counts map[int32]int64, q float64) int64 {
 	for b := range counts {
 		buckets = append(buckets, b)
 	}
+
 	slices.Sort(buckets)
 
-	rank := int64(math.Ceil(float64(total) * q))
+	rank := int64(math.Ceil(float64(total) * quantile))
 
 	var cumulative int64
 	for _, b := range buckets {

@@ -31,6 +31,7 @@ func extraFindLogs(t *testing.T, db *store.Store) []store.Log {
 	db.WaitForWrites()
 
 	var logs []store.Log
+
 	assert.NilError(t, db.Order("id ASC").Find(&logs).Error)
 
 	return logs
@@ -41,6 +42,8 @@ func extraFindLogs(t *testing.T, db *store.Store) []store.Log {
 // must be read back and written to the database. Before the fix the loggers read
 // a function-local key type that never matched, silently dropping the metadata.
 func TestContextLoggersExtractMetadata(t *testing.T) {
+	t.Parallel()
+
 	s, db := newExtraDebugService(t)
 
 	ctx := context.WithValue(context.Background(), EntityIDKey, "light.hall")
@@ -64,6 +67,8 @@ func TestContextLoggersExtractMetadata(t *testing.T) {
 // TestContextLoggersDoNotDuplicateAutomation verifies an explicit "automation"
 // arg supplied by the caller is not overridden or duplicated by the context.
 func TestContextLoggersDoNotDuplicateAutomation(t *testing.T) {
+	t.Parallel()
+
 	s, db := newExtraDebugService(t)
 
 	ctx := context.WithValue(context.Background(), AutomationNameKey, "motion_lights")
@@ -79,6 +84,8 @@ func TestContextLoggersDoNotDuplicateAutomation(t *testing.T) {
 // TestErrorContextDoesNotOverrideExplicitAutomation is the ErrorContext analogue:
 // a context automation name must not override an explicit "automation" arg.
 func TestErrorContextDoesNotOverrideExplicitAutomation(t *testing.T) {
+	t.Parallel()
+
 	s, db := newExtraDebugService(t)
 
 	ctx := context.WithValue(context.Background(), AutomationNameKey, "context_automation")
@@ -93,6 +100,8 @@ func TestErrorContextDoesNotOverrideExplicitAutomation(t *testing.T) {
 }
 
 func TestWriteLogTextRespectsLevel(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	assert.NilError(t, err)
 
@@ -114,6 +123,8 @@ func TestWriteLogTextRespectsLevel(t *testing.T) {
 // itself fails. Dropping the logs table makes the DELETE error ("no such
 // table"), which pruneLogs must log without panicking.
 func TestPruneLogsHandlesDeleteError(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	assert.NilError(t, err)
 
@@ -126,6 +137,7 @@ func TestPruneLogsHandlesDeleteError(t *testing.T) {
 
 	stopChan := make(chan struct{})
 	done := make(chan struct{})
+
 	go func() {
 		s.pruneLogs(stopChan)
 		close(done)
@@ -137,6 +149,7 @@ func TestPruneLogsHandlesDeleteError(t *testing.T) {
 	db.WaitForWrites()
 
 	close(stopChan)
+
 	select {
 	case <-done:
 	case <-time.After(time.Second):

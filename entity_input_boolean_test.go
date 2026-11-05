@@ -4,80 +4,37 @@ import (
 	"testing"
 
 	"github.com/dansimau/hal"
-	"github.com/dansimau/hal/homeassistant"
 	"gotest.tools/v3/assert"
 )
 
 func TestNewInputBoolean(t *testing.T) {
 	t.Parallel()
+
 	inputBoolean := hal.NewInputBoolean("input_boolean.test")
 	assert.Equal(t, inputBoolean.GetID(), "input_boolean.test")
 }
 
 func TestInputBoolean_IsOff(t *testing.T) {
 	t.Parallel()
-	t.Run("returns true when state is off", func(t *testing.T) {
-		t.Parallel()
-		inputBoolean := hal.NewInputBoolean("input_boolean.test")
-		state := homeassistant.State{State: "off"}
-		inputBoolean.SetState(state)
 
-		assert.Equal(t, inputBoolean.IsOff(), true)
-	})
-
-	t.Run("returns false when state is on", func(t *testing.T) {
-		t.Parallel()
-		inputBoolean := hal.NewInputBoolean("input_boolean.test")
-		state := homeassistant.State{State: "on"}
-		inputBoolean.SetState(state)
-
-		assert.Equal(t, inputBoolean.IsOff(), false)
-	})
-
-	t.Run("returns false when state is other value", func(t *testing.T) {
-		t.Parallel()
-		inputBoolean := hal.NewInputBoolean("input_boolean.test")
-		state := homeassistant.State{State: "unavailable"}
-		inputBoolean.SetState(state)
-
-		assert.Equal(t, inputBoolean.IsOff(), false)
-	})
+	runStateCheckCases(t, func() *hal.InputBoolean {
+		return hal.NewInputBoolean("input_boolean.test")
+	}, (*hal.InputBoolean).IsOff, isOffCases(stateUnavailable))
 }
 
 func TestInputBoolean_IsOn(t *testing.T) {
 	t.Parallel()
-	t.Run("returns true when state is on", func(t *testing.T) {
-		t.Parallel()
-		inputBoolean := hal.NewInputBoolean("input_boolean.test")
-		state := homeassistant.State{State: "on"}
-		inputBoolean.SetState(state)
 
-		assert.Equal(t, inputBoolean.IsOn(), true)
-	})
-
-	t.Run("returns false when state is off", func(t *testing.T) {
-		t.Parallel()
-		inputBoolean := hal.NewInputBoolean("input_boolean.test")
-		state := homeassistant.State{State: "off"}
-		inputBoolean.SetState(state)
-
-		assert.Equal(t, inputBoolean.IsOn(), false)
-	})
-
-	t.Run("returns false when state is other value", func(t *testing.T) {
-		t.Parallel()
-		inputBoolean := hal.NewInputBoolean("input_boolean.test")
-		state := homeassistant.State{State: "unknown"}
-		inputBoolean.SetState(state)
-
-		assert.Equal(t, inputBoolean.IsOn(), false)
-	})
+	runStateCheckCases(t, func() *hal.InputBoolean {
+		return hal.NewInputBoolean("input_boolean.test")
+	}, (*hal.InputBoolean).IsOn, isOnCases("unknown"))
 }
 
 func TestInputBoolean_TurnOn(t *testing.T) {
 	t.Parallel()
 	t.Run("returns error when not registered", func(t *testing.T) {
 		t.Parallel()
+
 		inputBoolean := hal.NewInputBoolean("input_boolean.test")
 		err := inputBoolean.TurnOn()
 		assert.Equal(t, err, hal.ErrEntityNotRegistered)
@@ -85,6 +42,7 @@ func TestInputBoolean_TurnOn(t *testing.T) {
 
 	t.Run("accepts attributes", func(t *testing.T) {
 		t.Parallel()
+
 		inputBoolean := hal.NewInputBoolean("input_boolean.test")
 		err := inputBoolean.TurnOn(map[string]any{"custom": "value"})
 		assert.Equal(t, err, hal.ErrEntityNotRegistered)
@@ -95,6 +53,7 @@ func TestInputBoolean_TurnOff(t *testing.T) {
 	t.Parallel()
 	t.Run("returns error when not registered", func(t *testing.T) {
 		t.Parallel()
+
 		inputBoolean := hal.NewInputBoolean("input_boolean.test")
 		err := inputBoolean.TurnOff()
 		assert.Equal(t, err, hal.ErrEntityNotRegistered)

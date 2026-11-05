@@ -11,6 +11,8 @@ import (
 )
 
 func TestColorDiff(t *testing.T) {
+	t.Parallel()
+
 	diff := "context line\n+added line\n-removed line"
 
 	out := colorDiff(diff)
@@ -20,27 +22,36 @@ func TestColorDiff(t *testing.T) {
 	if !strings.Contains(out, "added line") {
 		t.Errorf("expected output to contain added line, got %q", out)
 	}
+
 	if !strings.Contains(out, "removed line") {
 		t.Errorf("expected output to contain removed line, got %q", out)
 	}
+
 	if !strings.Contains(out, "context line") {
 		t.Errorf("expected output to contain context line, got %q", out)
 	}
 }
 
 func TestPrettifyJSON(t *testing.T) {
+	t.Parallel()
+
 	t.Run("valid JSON is indented", func(t *testing.T) {
+		t.Parallel()
+
 		colored, plain := prettifyJSON(`{"a":1,"b":2}`)
 
 		if !strings.Contains(plain, "\n") {
 			t.Errorf("expected plain output to be indented, got %q", plain)
 		}
+
 		if colored == "" {
 			t.Error("expected colored output to be non-empty")
 		}
 	})
 
 	t.Run("invalid JSON returns original for both", func(t *testing.T) {
+		t.Parallel()
+
 		colored, plain := prettifyJSON("not json")
 
 		if colored != "not json" || plain != "not json" {
@@ -50,6 +61,8 @@ func TestPrettifyJSON(t *testing.T) {
 }
 
 func TestInfoDiffWritesToDatabase(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
@@ -57,30 +70,37 @@ func TestInfoDiffWritesToDatabase(t *testing.T) {
 
 	service := NewServiceWithDB(db)
 
-	service.InfoDiff("state changed", "light.kitchen", "-old\n+new", "reason", "manual")
+	service.InfoDiff("state changed", testEntityKitchen, "-old\n+new", "reason", "manual")
 
 	db.WaitForWrites()
 
 	var logs []store.Log
-	if err := db.Find(&logs).Error; err != nil {
+
+	err = db.Find(&logs).Error
+	if err != nil {
 		t.Fatalf("Failed to query logs: %v", err)
 	}
 
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 log, got %d", len(logs))
 	}
+
 	if !strings.Contains(logs[0].LogText, "state changed") {
 		t.Errorf("expected message in log text, got %q", logs[0].LogText)
 	}
+
 	if !strings.Contains(logs[0].LogText, "+new") {
 		t.Errorf("expected diff in log text, got %q", logs[0].LogText)
 	}
-	if logs[0].EntityID != "light.kitchen" {
+
+	if logs[0].EntityID != testEntityKitchen {
 		t.Errorf("expected entity id, got %q", logs[0].EntityID)
 	}
 }
 
 func TestDebugJSONWritesToDatabase(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
@@ -94,22 +114,28 @@ func TestDebugJSONWritesToDatabase(t *testing.T) {
 	db.WaitForWrites()
 
 	var logs []store.Log
-	if err := db.Find(&logs).Error; err != nil {
+
+	err = db.Find(&logs).Error
+	if err != nil {
 		t.Fatalf("Failed to query logs: %v", err)
 	}
 
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 log, got %d", len(logs))
 	}
+
 	if !strings.Contains(logs[0].LogText, "payload") {
 		t.Errorf("expected message in log text, got %q", logs[0].LogText)
 	}
+
 	if !strings.Contains(logs[0].LogText, "\"value\": 21") {
 		t.Errorf("expected indented JSON in log text, got %q", logs[0].LogText)
 	}
 }
 
 func TestDebugJSONBelowLevelIsNotWritten(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
@@ -123,15 +149,20 @@ func TestDebugJSONBelowLevelIsNotWritten(t *testing.T) {
 	db.WaitForWrites()
 
 	var count int64
-	if err := db.Model(&store.Log{}).Count(&count).Error; err != nil {
+
+	err = db.Model(&store.Log{}).Count(&count).Error
+	if err != nil {
 		t.Fatalf("Failed to count logs: %v", err)
 	}
+
 	if count != 0 {
 		t.Errorf("expected no logs below level, got %d", count)
 	}
 }
 
 func TestInfoDiffBuffersWithoutDatabase(t *testing.T) {
+	t.Parallel()
+
 	// No database configured, so the entry lands in the in-memory buffer.
 	service := NewService()
 
@@ -147,6 +178,8 @@ func TestInfoDiffBuffersWithoutDatabase(t *testing.T) {
 }
 
 func TestContextLoggingWrites(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
@@ -164,25 +197,33 @@ func TestContextLoggingWrites(t *testing.T) {
 	db.WaitForWrites()
 
 	var count int64
-	if err := db.Model(&store.Log{}).Count(&count).Error; err != nil {
+
+	err = db.Model(&store.Log{}).Count(&count).Error
+	if err != nil {
 		t.Fatalf("Failed to count logs: %v", err)
 	}
+
 	if count != 4 {
 		t.Errorf("expected 4 context logs, got %d", count)
 	}
 }
 
 func TestContextExtractionHelpers(t *testing.T) {
+	t.Parallel()
+
 	// A background context carries neither value.
 	if got := getEntityIDFromContext(context.Background()); got != "" {
 		t.Errorf("expected empty entity id, got %q", got)
 	}
+
 	if got := getAutomationNameFromContext(context.Background()); got != "" {
 		t.Errorf("expected empty automation name, got %q", got)
 	}
 }
 
 func TestServiceStartStopLifecycle(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
@@ -200,6 +241,8 @@ func TestServiceStartStopLifecycle(t *testing.T) {
 }
 
 func TestServiceStartWithoutDatabase(t *testing.T) {
+	t.Parallel()
+
 	service := NewService()
 
 	// Without a database the pruning goroutine is not started, but Start/Stop
@@ -209,6 +252,8 @@ func TestServiceStartWithoutDatabase(t *testing.T) {
 }
 
 func TestServicePruneLogsRemovesExpired(t *testing.T) {
+	t.Parallel()
+
 	db, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
@@ -219,10 +264,13 @@ func TestServicePruneLogsRemovesExpired(t *testing.T) {
 	service.retentionTime = time.Hour
 
 	// One expired log and one fresh log inserted directly.
-	if err := db.Create(&store.Log{Timestamp: time.Now().Add(-2 * time.Hour), Level: "INFO", LogText: "old"}).Error; err != nil {
+	err = db.Create(&store.Log{Timestamp: time.Now().Add(-2 * time.Hour), Level: "INFO", LogText: "old"}).Error
+	if err != nil {
 		t.Fatalf("Failed to insert old log: %v", err)
 	}
-	if err := db.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: "new"}).Error; err != nil {
+
+	err = db.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: "new"}).Error
+	if err != nil {
 		t.Fatalf("Failed to insert new log: %v", err)
 	}
 
@@ -231,13 +279,17 @@ func TestServicePruneLogsRemovesExpired(t *testing.T) {
 
 	// Wait for a prune tick to fire and its async delete to complete.
 	deadline := time.After(3 * time.Second)
+
 	for {
 		db.WaitForWrites()
 
 		var count int64
-		if err := db.Model(&store.Log{}).Count(&count).Error; err != nil {
+
+		err = db.Model(&store.Log{}).Count(&count).Error
+		if err != nil {
 			t.Fatalf("Failed to count logs: %v", err)
 		}
+
 		if count == 1 {
 			return
 		}
@@ -251,7 +303,8 @@ func TestServicePruneLogsRemovesExpired(t *testing.T) {
 	}
 }
 
-func TestGlobalDiffAndContextWrappers(t *testing.T) {
+//nolint:paralleltest // uses the global default logger
+func TestGlobalDiffAndContextWrappers(_ *testing.T) {
 	// Exercise the package-level convenience wrappers. The default logger has no
 	// database in tests, so these just need to run without panicking.
 	InfoDiff("global diff", "light.x", "-a\n+b")

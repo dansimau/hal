@@ -15,24 +15,12 @@ type Timer struct {
 	entities   hal.Entities
 	name       string
 	timer      *time.Timer
-	ctx        context.Context
 }
 
 func NewTimer(name string) *Timer {
 	return &Timer{
 		name: name,
 	}
-}
-
-func (a *Timer) checkConditions(ctx context.Context) bool {
-	for i, condition := range a.conditions {
-		if !condition() {
-			logger.InfoContext(ctx, "Timer condition not met", "condition", i)
-			return false
-		}
-	}
-
-	return true
 }
 
 // Condition sets a condition that must be true for the timer to start.
@@ -63,39 +51,6 @@ func (a *Timer) Run(action func(ctx context.Context)) *Timer {
 	return a
 }
 
-// startTimer starts the timer.
-func (a *Timer) startTimer(ctx context.Context) {
-	a.ctx = ctx
-	logger.InfoContext(ctx, "Starting timer")
-
-	if a.timer == nil {
-		a.timer = time.AfterFunc(a.delay, func() {
-			logger.InfoContext(ctx, "Timer elapsed")
-			a.runAction(a.ctx)
-		})
-	} else {
-		a.timer.Reset(a.delay)
-	}
-}
-
-// stopTimer stops the timer.
-func (a *Timer) stopTimer(ctx context.Context) {
-	logger.InfoContext(ctx, "Stopping timer")
-	if a.timer != nil {
-		a.timer.Stop()
-	}
-}
-
-func (a *Timer) runAction(ctx context.Context) {
-	// Check conditions once more before executing action
-	if !a.checkConditions(ctx) {
-		return
-	}
-
-	logger.InfoContext(ctx, "Executing action")
-	a.action(ctx)
-}
-
 func (a *Timer) Name() string {
 	return a.name
 }
@@ -110,4 +65,50 @@ func (a *Timer) Action(ctx context.Context, _ hal.EntityInterface) {
 	} else {
 		a.stopTimer(ctx)
 	}
+}
+
+func (a *Timer) checkConditions(ctx context.Context) bool {
+	for i, condition := range a.conditions {
+		if !condition() {
+			logger.InfoContext(ctx, "Timer condition not met", "condition", i)
+
+			return false
+		}
+	}
+
+	return true
+}
+
+// startTimer starts the timer, or restarts it with the latest context if it
+// is already running.
+func (a *Timer) startTimer(ctx context.Context) {
+	logger.InfoContext(ctx, "Starting timer")
+
+	if a.timer != nil {
+		a.timer.Stop()
+	}
+
+	a.timer = time.AfterFunc(a.delay, func() {
+		logger.InfoContext(ctx, "Timer elapsed")
+		a.runAction(ctx)
+	})
+}
+
+// stopTimer stops the timer.
+func (a *Timer) stopTimer(ctx context.Context) {
+	logger.InfoContext(ctx, "Stopping timer")
+
+	if a.timer != nil {
+		a.timer.Stop()
+	}
+}
+
+func (a *Timer) runAction(ctx context.Context) {
+	// Check conditions once more before executing action
+	if !a.checkConditions(ctx) {
+		return
+	}
+
+	logger.InfoContext(ctx, "Executing action")
+	a.action(ctx)
 }

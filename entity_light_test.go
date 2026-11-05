@@ -10,6 +10,7 @@ import (
 
 func TestNewLight(t *testing.T) {
 	t.Parallel()
+
 	light := hal.NewLight("light.test")
 	assert.Equal(t, light.GetID(), "light.test")
 }
@@ -18,10 +19,11 @@ func TestLight_GetBrightness(t *testing.T) {
 	t.Parallel()
 	t.Run("returns brightness from attributes", func(t *testing.T) {
 		t.Parallel()
+
 		light := hal.NewLight("light.test")
 		state := homeassistant.State{
 			Attributes: map[string]any{
-				"brightness": float64(255),
+				attrBrightness: float64(255),
 			},
 		}
 		light.SetState(state)
@@ -32,6 +34,7 @@ func TestLight_GetBrightness(t *testing.T) {
 
 	t.Run("returns 0 when brightness not in attributes", func(t *testing.T) {
 		t.Parallel()
+
 		light := hal.NewLight("light.test")
 		state := homeassistant.State{
 			Attributes: map[string]any{},
@@ -44,10 +47,11 @@ func TestLight_GetBrightness(t *testing.T) {
 
 	t.Run("returns 0 when brightness is wrong type", func(t *testing.T) {
 		t.Parallel()
+
 		light := hal.NewLight("light.test")
 		state := homeassistant.State{
 			Attributes: map[string]any{
-				"brightness": "invalid",
+				attrBrightness: "invalid",
 			},
 		}
 		light.SetState(state)
@@ -59,38 +63,17 @@ func TestLight_GetBrightness(t *testing.T) {
 
 func TestLight_IsOn(t *testing.T) {
 	t.Parallel()
-	t.Run("returns true when state is on", func(t *testing.T) {
-		t.Parallel()
-		light := hal.NewLight("light.test")
-		state := homeassistant.State{State: "on"}
-		light.SetState(state)
 
-		assert.Equal(t, light.IsOn(), true)
-	})
-
-	t.Run("returns false when state is off", func(t *testing.T) {
-		t.Parallel()
-		light := hal.NewLight("light.test")
-		state := homeassistant.State{State: "off"}
-		light.SetState(state)
-
-		assert.Equal(t, light.IsOn(), false)
-	})
-
-	t.Run("returns false when state is other value", func(t *testing.T) {
-		t.Parallel()
-		light := hal.NewLight("light.test")
-		state := homeassistant.State{State: "unavailable"}
-		light.SetState(state)
-
-		assert.Equal(t, light.IsOn(), false)
-	})
+	runStateCheckCases(t, func() *hal.Light {
+		return hal.NewLight("light.test")
+	}, (*hal.Light).IsOn, isOnCases(stateUnavailable))
 }
 
 func TestLight_TurnOn(t *testing.T) {
 	t.Parallel()
 	t.Run("returns error when not registered", func(t *testing.T) {
 		t.Parallel()
+
 		light := hal.NewLight("light.test")
 		err := light.TurnOn()
 		assert.Equal(t, err, hal.ErrEntityNotRegistered)
@@ -103,7 +86,7 @@ func TestLight_TurnOn(t *testing.T) {
 		light := hal.NewLight("light.test")
 
 		// Test with attributes
-		err := light.TurnOn(map[string]any{"brightness": 128})
+		err := light.TurnOn(map[string]any{attrBrightness: 128})
 		assert.Equal(t, err, hal.ErrEntityNotRegistered)
 	})
 }
@@ -112,6 +95,7 @@ func TestLight_TurnOff(t *testing.T) {
 	t.Parallel()
 	t.Run("returns error when not registered", func(t *testing.T) {
 		t.Parallel()
+
 		light := hal.NewLight("light.test")
 		err := light.TurnOff()
 		assert.Equal(t, err, hal.ErrEntityNotRegistered)
@@ -122,12 +106,14 @@ func TestLightGroup_GetID(t *testing.T) {
 	t.Parallel()
 	t.Run("returns empty group message for empty group", func(t *testing.T) {
 		t.Parallel()
+
 		lg := hal.LightGroup{}
 		assert.Equal(t, lg.GetID(), "(empty light group)")
 	})
 
 	t.Run("returns joined IDs for multiple lights", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 		lg := hal.LightGroup{light1, light2}
@@ -140,17 +126,19 @@ func TestLightGroup_GetBrightness(t *testing.T) {
 	t.Parallel()
 	t.Run("returns 0 for empty group", func(t *testing.T) {
 		t.Parallel()
+
 		lg := hal.LightGroup{}
 		assert.Equal(t, lg.GetBrightness(), float64(0))
 	})
 
 	t.Run("returns brightness of first light", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 
-		state1 := homeassistant.State{Attributes: map[string]any{"brightness": float64(100)}}
-		state2 := homeassistant.State{Attributes: map[string]any{"brightness": float64(200)}}
+		state1 := homeassistant.State{Attributes: map[string]any{attrBrightness: float64(100)}}
+		state2 := homeassistant.State{Attributes: map[string]any{attrBrightness: float64(200)}}
 
 		light1.SetState(state1)
 		light2.SetState(state2)
@@ -164,6 +152,7 @@ func TestLightGroup_GetState(t *testing.T) {
 	t.Parallel()
 	t.Run("returns empty state for empty group", func(t *testing.T) {
 		t.Parallel()
+
 		lg := hal.LightGroup{}
 		state := lg.GetState()
 		assert.DeepEqual(t, state, homeassistant.State{})
@@ -171,8 +160,9 @@ func TestLightGroup_GetState(t *testing.T) {
 
 	t.Run("returns state of first light", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
-		expectedState := homeassistant.State{State: "on", Attributes: map[string]any{"brightness": float64(255)}}
+		expectedState := homeassistant.State{State: stateOn, Attributes: map[string]any{attrBrightness: float64(255)}}
 		light1.SetState(expectedState)
 
 		lg := hal.LightGroup{light1}
@@ -185,11 +175,12 @@ func TestLightGroup_SetState(t *testing.T) {
 	t.Parallel()
 	t.Run("sets state on all lights in group", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 		lg := hal.LightGroup{light1, light2}
 
-		newState := homeassistant.State{State: "on", Attributes: map[string]any{"brightness": float64(128)}}
+		newState := homeassistant.State{State: stateOn, Attributes: map[string]any{attrBrightness: float64(128)}}
 		lg.SetState(newState)
 
 		assert.DeepEqual(t, light1.GetState(), newState)
@@ -201,11 +192,12 @@ func TestLightGroup_IsOn(t *testing.T) {
 	t.Parallel()
 	t.Run("returns true when all lights are on", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 
-		light1.SetState(homeassistant.State{State: "on"})
-		light2.SetState(homeassistant.State{State: "on"})
+		light1.SetState(homeassistant.State{State: stateOn})
+		light2.SetState(homeassistant.State{State: stateOn})
 
 		lg := hal.LightGroup{light1, light2}
 		assert.Equal(t, lg.IsOn(), true)
@@ -213,11 +205,12 @@ func TestLightGroup_IsOn(t *testing.T) {
 
 	t.Run("returns false when any light is off", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 
-		light1.SetState(homeassistant.State{State: "on"})
-		light2.SetState(homeassistant.State{State: "off"})
+		light1.SetState(homeassistant.State{State: stateOn})
+		light2.SetState(homeassistant.State{State: stateOff})
 
 		lg := hal.LightGroup{light1, light2}
 		assert.Equal(t, lg.IsOn(), false)
@@ -225,6 +218,7 @@ func TestLightGroup_IsOn(t *testing.T) {
 
 	t.Run("returns true for empty group", func(t *testing.T) {
 		t.Parallel()
+
 		lg := hal.LightGroup{}
 		assert.Equal(t, lg.IsOn(), true)
 	})
@@ -242,6 +236,7 @@ func TestLightGroup_TurnOn(t *testing.T) {
 
 	t.Run("collects errors from individual lights", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 		lg := hal.LightGroup{light1, light2}
@@ -257,6 +252,7 @@ func TestLightGroup_TurnOff(t *testing.T) {
 	t.Parallel()
 	t.Run("returns nil when no errors", func(t *testing.T) {
 		t.Parallel()
+
 		lg := hal.LightGroup{}
 		err := lg.TurnOff()
 		assert.NilError(t, err)
@@ -264,6 +260,7 @@ func TestLightGroup_TurnOff(t *testing.T) {
 
 	t.Run("collects errors from individual lights", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 		lg := hal.LightGroup{light1, light2}
@@ -278,6 +275,7 @@ func TestLightGroup_BindConnection(t *testing.T) {
 	t.Parallel()
 	t.Run("binds connection to all lights", func(t *testing.T) {
 		t.Parallel()
+
 		light1 := hal.NewLight("light.1")
 		light2 := hal.NewLight("light.2")
 		lg := hal.LightGroup{light1, light2}

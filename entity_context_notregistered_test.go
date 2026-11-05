@@ -21,7 +21,7 @@ func TestLight_TurnOnContext_NotRegistered(t *testing.T) {
 	assert.Equal(t, err, hal.ErrEntityNotRegistered)
 
 	// With attributes too.
-	err = light.TurnOnContext(context.Background(), map[string]any{"brightness": 128})
+	err = light.TurnOnContext(context.Background(), map[string]any{attrBrightness: 128})
 	assert.Equal(t, err, hal.ErrEntityNotRegistered)
 }
 

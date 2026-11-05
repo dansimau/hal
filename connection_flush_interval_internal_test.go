@@ -24,7 +24,7 @@ func TestFlushIntervalFromEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(FlushIntervalEnv, tc.value)
 
-			conn := NewConnection(Config{DatabasePath: ":memory:"})
+			conn := NewConnection(Config{DatabasePath: memoryDatabasePath})
 			defer conn.Close()
 
 			assert.Equal(t, conn.db.FlushInterval(), tc.want)
@@ -35,7 +35,7 @@ func TestFlushIntervalFromEnv(t *testing.T) {
 func TestFlushIntervalDefault(t *testing.T) {
 	t.Setenv(FlushIntervalEnv, "")
 
-	conn := NewConnection(Config{DatabasePath: ":memory:"})
+	conn := NewConnection(Config{DatabasePath: memoryDatabasePath})
 	defer conn.Close()
 
 	assert.Equal(t, conn.db.FlushInterval(), store.DefaultFlushInterval)

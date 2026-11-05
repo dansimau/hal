@@ -19,6 +19,8 @@ import (
 // listens for state updates and invokes automations when state changes are detected.
 // TODO: Rename "Connection" to something more descriptive.
 type Connection struct {
+	*SunTimes
+
 	config Config
 	db     *store.Store
 
@@ -30,8 +32,6 @@ type Connection struct {
 
 	homeAssistant  *hassws.Client
 	metricsService *metrics.Service
-
-	*SunTimes
 
 	shutdownCh        chan struct{}
 	closeOnce         sync.Once
@@ -48,7 +48,7 @@ func parseFlushInterval(value string) (time.Duration, error) {
 	}
 
 	if interval < 0 {
-		return 0, fmt.Errorf("flush interval must not be negative: %s", value)
+		return 0, fmt.Errorf("%w: %s", ErrNegativeFlushInterval, value)
 	}
 
 	return interval, nil
@@ -68,6 +68,10 @@ type ConnectionBinder interface {
 // store.DefaultFlushInterval.
 const FlushIntervalEnv = "HAL_DB_FLUSH_INTERVAL"
 
+// defaultReconnectInterval is how long to wait between reconnection attempts
+// when Config.ReconnectInterval is unset.
+const defaultReconnectInterval = 10 * time.Second
+
 func NewConnection(cfg Config) *Connection {
 	dbPath := cfg.DatabasePath
 	if dbPath == "" {
@@ -80,8 +84,9 @@ func NewConnection(cfg Config) *Connection {
 	}
 
 	if value := os.Getenv(FlushIntervalEnv); value != "" {
-		if interval, err := parseFlushInterval(value); err != nil {
-			logger.Error("Ignoring invalid "+FlushIntervalEnv, "", "value", value, "error", err)
+		interval, parseErr := parseFlushInterval(value)
+		if parseErr != nil {
+			logger.Error("Ignoring invalid "+FlushIntervalEnv, "", "value", value, "error", parseErr)
 		} else {
 			db.SetFlushInterval(interval)
 			logger.Info("Database flush interval set from "+FlushIntervalEnv, "", "interval", interval)
@@ -101,7 +106,7 @@ func NewConnection(cfg Config) *Connection {
 	// Set reconnect interval with default
 	reconnectInterval := cfg.ReconnectInterval
 	if reconnectInterval == 0 {
-		reconnectInterval = 10 * time.Second
+		reconnectInterval = defaultReconnectInterval
 	}
 
 	return &Connection{
@@ -165,23 +170,6 @@ func (h *Connection) RegisterEntities(entities ...EntityInterface) {
 	}
 }
 
-// connect establishes the WebSocket connection, subscribes to events, and syncs states.
-func (h *Connection) connect() error {
-	if err := h.homeAssistant.Connect(); err != nil {
-		return err
-	}
-
-	if err := h.homeAssistant.SubscribeEvents(string(hassws.MessageTypeStateChanged), h.StateChangeEvent); err != nil {
-		return fmt.Errorf("failed to subscribe to state changed events: %w", err)
-	}
-
-	if err := h.syncStates(); err != nil {
-		return fmt.Errorf("failed to sync initial states: %w", err)
-	}
-
-	return nil
-}
-
 // Start connects to the Home Assistant websocket and starts listening for events.
 // This method is blocking and will retry connections indefinitely with 10-second intervals.
 func (h *Connection) Start() error {
@@ -202,7 +190,8 @@ func (h *Connection) Start() error {
 	})
 
 	// Initial connection attempt
-	if err := h.connect(); err != nil {
+	err := h.connect()
+	if err != nil {
 		logger.Error("Initial connection failed", "", "error", err)
 		// Signal reconnection to start retry loop
 		disconnectedCh <- struct{}{}
@@ -222,13 +211,16 @@ func (h *Connection) Start() error {
 			attempt := h.GetReconnectAttempts()
 
 			logger.Info("Attempting to reconnect", "", "attempt", attempt)
-			if err := h.connect(); err != nil {
+
+			err := h.connect()
+			if err != nil {
 				logger.Error("Reconnection failed", "", "error", err)
 				// Signal reconnection for retry
 				select {
 				case disconnectedCh <- struct{}{}:
 				default:
 				}
+
 				continue
 			}
 
@@ -236,6 +228,7 @@ func (h *Connection) Start() error {
 
 		case <-h.shutdownCh:
 			logger.Info("Shutdown signal received, stopping reconnection loop", "")
+
 			return nil
 		}
 	}
@@ -254,38 +247,16 @@ func (h *Connection) Close() {
 		logger.StopDefault()
 
 		// Flush pending database writes before closing
-		if err := h.db.Close(); err != nil {
+		err := h.db.Close()
+		if err != nil {
 			logger.Error("Failed to close database", "", "error", err)
 		}
 	})
 }
 
-func (h *Connection) syncStates() error {
-	defer perf.Timer(func(timeTaken time.Duration) {
-		logger.Info("Initial state sync complete", "", "duration", timeTaken)
-	})()
-
-	states, err := h.homeAssistant.GetStates()
-	if err != nil {
-		return err
-	}
-
-	for _, state := range states {
-		entity, ok := h.entities[state.EntityID]
-		if !ok {
-			continue
-		}
-
-		logger.Debug("Setting initial state", state.EntityID, "State", state)
-
-		entity.SetState(state)
-	}
-
-	return nil
-}
-
-// Process incoming state change events. Dispatch state change to the relevant
-// entity and fire any automations listening for state changes to this entity.
+// StateChangeEvent processes incoming state change events. It dispatches the
+// state change to the relevant entity and fires any automations listening for
+// state changes to this entity.
 func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	defer perf.Timer(func(timeTaken time.Duration) {
 		logger.Debug("Tick processing time", event.Event.EventData.EntityID, "duration", timeTaken)
@@ -303,7 +274,11 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		return
 	}
 
-	logger.InfoDiff("State changed for", event.Event.EventData.EntityID, cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState))
+	logger.InfoDiff(
+		"State changed for",
+		event.Event.EventData.EntityID,
+		cmp.Diff(event.Event.EventData.OldState, event.Event.EventData.NewState),
+	)
 
 	// A nil NewState carries no state to apply (e.g. entity removed); leave the
 	// stored state untouched rather than overwriting it with nil.
@@ -346,4 +321,48 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 		h.metricsService.RecordCounter(store.MetricTypeAutomationTriggered, event.Event.EventData.EntityID, automation.Name())
 		automation.Action(ctx, entity)
 	}
+}
+
+// connect establishes the WebSocket connection, subscribes to events, and syncs states.
+func (h *Connection) connect() error {
+	err := h.homeAssistant.Connect()
+	if err != nil {
+		return err
+	}
+
+	err = h.homeAssistant.SubscribeEvents(string(hassws.MessageTypeStateChanged), h.StateChangeEvent)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to state changed events: %w", err)
+	}
+
+	err = h.syncStates()
+	if err != nil {
+		return fmt.Errorf("failed to sync initial states: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Connection) syncStates() error {
+	defer perf.Timer(func(timeTaken time.Duration) {
+		logger.Info("Initial state sync complete", "", "duration", timeTaken)
+	})()
+
+	states, err := h.homeAssistant.GetStates()
+	if err != nil {
+		return err
+	}
+
+	for _, state := range states {
+		entity, ok := h.entities[state.EntityID]
+		if !ok {
+			continue
+		}
+
+		logger.Debug("Setting initial state", state.EntityID, "State", state)
+
+		entity.SetState(state)
+	}
+
+	return nil
 }

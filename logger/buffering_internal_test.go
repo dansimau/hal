@@ -8,6 +8,8 @@ import (
 )
 
 func TestBuffering(t *testing.T) {
+	t.Parallel()
+
 	// Create logging service without database
 	service := NewService()
 	service.SetLevel(slog.LevelDebug) // Set to Debug level to capture all logs
@@ -19,9 +21,11 @@ func TestBuffering(t *testing.T) {
 
 	// Verify messages are buffered
 	service.mu.RLock()
+
 	if service.bufferCount != 3 {
 		t.Errorf("Expected 3 buffered messages, got %d", service.bufferCount)
 	}
+
 	service.mu.RUnlock()
 
 	// Create database and set it
@@ -47,7 +51,9 @@ func TestBuffering(t *testing.T) {
 
 	// Verify logs were written to database
 	var logs []store.Log
-	if err := db.Find(&logs).Error; err != nil {
+
+	err = db.Find(&logs).Error
+	if err != nil {
 		t.Fatalf("Failed to query logs: %v", err)
 	}
 
@@ -56,13 +62,18 @@ func TestBuffering(t *testing.T) {
 	}
 
 	// Verify log contents
-	expectedMessages := []string{"Buffered message 1 entity_id=entity.test", "Buffered message 2", "Buffered message 3 entity_id=entity.another"}
+	expectedMessages := []string{
+		"Buffered message 1 entity_id=entity.test",
+		"Buffered message 2",
+		"Buffered message 3 entity_id=entity.another",
+	}
 	expectedEntityIDs := []string{"entity.test", "", "entity.another"}
 
 	for i, log := range logs {
 		if log.LogText != expectedMessages[i] {
 			t.Errorf("Expected log message '%s', got '%s'", expectedMessages[i], log.LogText)
 		}
+
 		if log.EntityID != expectedEntityIDs[i] {
 			t.Errorf("Expected entity ID '%s', got '%s'", expectedEntityIDs[i], log.EntityID)
 		}
@@ -70,18 +81,21 @@ func TestBuffering(t *testing.T) {
 }
 
 func TestCircularBuffer(t *testing.T) {
+	t.Parallel()
+
 	// Create service with small buffer for testing
 	service := NewService()
 	service.bufferSize = 3
 	service.buffer = make([]BufferedLog, 3)
 
 	// Fill buffer beyond capacity
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		service.Info("Message %d", "", "index", i)
 	}
 
 	// Check that buffer contains only last 3 messages
 	service.mu.RLock()
+
 	if service.bufferCount != 3 {
 		t.Errorf("Expected buffer count to be 3, got %d", service.bufferCount)
 	}
@@ -89,16 +103,20 @@ func TestCircularBuffer(t *testing.T) {
 	// Check that the oldest messages were overwritten
 	// Buffer should contain messages 2, 3, 4 with their formatted args
 	expectedTexts := []string{"Message %d index=2", "Message %d index=3", "Message %d index=4"}
-	for i := 0; i < 3; i++ {
+
+	for i := range 3 {
 		idx := (service.bufferHead - service.bufferCount + i + service.bufferSize) % service.bufferSize
+
 		bufferedLog := service.buffer[idx]
 		if bufferedLog.LogText != expectedTexts[i] {
 			t.Errorf("Expected buffered message '%s', got '%s'", expectedTexts[i], bufferedLog.LogText)
 		}
 	}
+
 	service.mu.RUnlock()
 }
 
+//nolint:paralleltest // uses the global default logger
 func TestGlobalFunctions(t *testing.T) {
 	// Create temporary database
 	db, err := store.Open(":memory:")
@@ -120,7 +138,9 @@ func TestGlobalFunctions(t *testing.T) {
 
 	// Verify logs were written
 	var logs []store.Log
-	if err := db.Find(&logs).Error; err != nil {
+
+	err = db.Find(&logs).Error
+	if err != nil {
 		t.Fatalf("Failed to query logs: %v", err)
 	}
 
@@ -128,13 +148,19 @@ func TestGlobalFunctions(t *testing.T) {
 		t.Errorf("Expected 4 logs from global functions, got %d", len(logs))
 	}
 
-	expectedMessages := []string{"Global info message entity_id=global.entity", "Global error message", "Global debug message entity_id=global.debug", "Global warn message entity_id=global.warn"}
+	expectedMessages := []string{
+		"Global info message entity_id=global.entity",
+		"Global error message",
+		"Global debug message entity_id=global.debug",
+		"Global warn message entity_id=global.warn",
+	}
 	expectedEntityIDs := []string{"global.entity", "", "global.debug", "global.warn"}
 
 	for i, log := range logs {
 		if log.LogText != expectedMessages[i] {
 			t.Errorf("Expected log message '%s', got '%s'", expectedMessages[i], log.LogText)
 		}
+
 		if log.EntityID != expectedEntityIDs[i] {
 			t.Errorf("Expected entity ID '%s', got '%s'", expectedEntityIDs[i], log.EntityID)
 		}

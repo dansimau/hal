@@ -9,9 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
+//nolint:paralleltest // a subtest uses the global default logger
 func TestDatabaseErrorHandling(t *testing.T) {
 	// Test that logging methods track no errors when database is working correctly
-	t.Run("successful database logging", func(t *testing.T) {
+	t.Run("successful database logging", func(t *testing.T) { //nolint:paralleltest // sibling uses the global logger
 		db, err := store.Open(":memory:")
 		if err != nil {
 			t.Fatalf("Failed to open test database: %v", err)
@@ -30,7 +31,8 @@ func TestDatabaseErrorHandling(t *testing.T) {
 		db.WaitForWrites()
 
 		// Verify no database errors occurred
-		if lastErr := service.LastError(); lastErr != nil {
+		lastErr := service.LastError()
+		if lastErr != nil {
 			t.Errorf("Expected no database errors, got: %v", lastErr)
 		}
 
@@ -40,7 +42,9 @@ func TestDatabaseErrorHandling(t *testing.T) {
 
 		// Verify logs were actually written to database
 		var logs []store.Log
-		if err := db.Find(&logs).Error; err != nil {
+
+		err = db.Find(&logs).Error
+		if err != nil {
 			t.Fatalf("Failed to query logs: %v", err)
 		}
 
@@ -50,7 +54,7 @@ func TestDatabaseErrorHandling(t *testing.T) {
 	})
 
 	// Test that logging methods track no errors when no database is available (buffering mode)
-	t.Run("buffering mode when no database", func(t *testing.T) {
+	t.Run("buffering mode when no database", func(t *testing.T) { //nolint:paralleltest // sibling uses the global logger
 		service := NewService() // No database set
 
 		// Test that all logging methods work when buffering
@@ -58,7 +62,8 @@ func TestDatabaseErrorHandling(t *testing.T) {
 		service.Error("Buffered error message", "test.entity")
 
 		// Verify no database errors occurred (since there's no database)
-		if lastErr := service.LastError(); lastErr != nil {
+		lastErr := service.LastError()
+		if lastErr != nil {
 			t.Errorf("Expected no database errors when buffering, got: %v", lastErr)
 		}
 
@@ -77,7 +82,7 @@ func TestDatabaseErrorHandling(t *testing.T) {
 	})
 
 	// Test global functions track no errors when working correctly
-	t.Run("global functions error handling", func(t *testing.T) {
+	t.Run("global functions error handling", func(t *testing.T) { //nolint:paralleltest // uses the global default logger
 		db, err := store.Open(":memory:")
 		if err != nil {
 			t.Fatalf("Failed to open test database: %v", err)
@@ -94,7 +99,8 @@ func TestDatabaseErrorHandling(t *testing.T) {
 		Warn("Global warn", "global.entity")
 
 		// Verify no database errors occurred
-		if lastErr := LastError(); lastErr != nil {
+		lastErr := LastError()
+		if lastErr != nil {
 			t.Errorf("Expected no database errors from global functions, got: %v", lastErr)
 		}
 
@@ -104,8 +110,10 @@ func TestDatabaseErrorHandling(t *testing.T) {
 	})
 }
 
-// mockFailingDB creates a database that will fail on Create operations
+// mockFailingDB creates a database that will fail on Create operations.
 func TestDatabaseFailureErrorHandling(t *testing.T) {
+	t.Parallel()
+
 	// Create a database with a closed connection to simulate failures
 	// Open database normally first
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -114,7 +122,8 @@ func TestDatabaseFailureErrorHandling(t *testing.T) {
 	}
 
 	// Auto-migrate to set up tables
-	if err := db.AutoMigrate(&store.Log{}); err != nil {
+	err = db.AutoMigrate(&store.Log{})
+	if err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
 
@@ -123,6 +132,7 @@ func TestDatabaseFailureErrorHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get underlying DB: %v", err)
 	}
+
 	sqlDB.Close()
 
 	// Note: With async writes, database errors are logged but not tracked in error counters.
@@ -140,6 +150,7 @@ func TestDatabaseFailureErrorHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get underlying DB: %v", err)
 	}
+
 	sqlDB2.Close()
 
 	// Create service with the closed database
@@ -159,7 +170,9 @@ func TestDatabaseFailureErrorHandling(t *testing.T) {
 	// Success is just not crashing - async write errors are logged via slog
 }
 
-// TestErrorTrackingFromGlobalFunctions tests that errors are properly tracked from global functions
+// TestErrorTrackingFromGlobalFunctions tests that errors are properly tracked from global functions.
+//
+//nolint:paralleltest // uses the global default logger
 func TestErrorTrackingFromGlobalFunctions(t *testing.T) {
 	// This test verifies error tracking by using a database that fails
 	// Create a database and immediately close it to force errors
@@ -169,7 +182,8 @@ func TestErrorTrackingFromGlobalFunctions(t *testing.T) {
 	}
 
 	// Auto-migrate to set up tables
-	if err := db.AutoMigrate(&store.Log{}); err != nil {
+	err = db.AutoMigrate(&store.Log{})
+	if err != nil {
 		t.Fatalf("Failed to migrate: %v", err)
 	}
 
@@ -178,6 +192,7 @@ func TestErrorTrackingFromGlobalFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get underlying DB: %v", err)
 	}
+
 	sqlDB.Close()
 
 	// Wrap in Store
@@ -191,6 +206,7 @@ func TestErrorTrackingFromGlobalFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get underlying DB: %v", err)
 	}
+
 	sqlDB2.Close()
 
 	// Set this failing database on the global logger

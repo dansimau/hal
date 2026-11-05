@@ -15,11 +15,11 @@ func NewInputBoolean(id string) *InputBoolean {
 }
 
 func (s *InputBoolean) IsOff() bool {
-	return s.GetState().State == "off"
+	return s.GetState().State == stateOff
 }
 
 func (s *InputBoolean) IsOn() bool {
-	return s.GetState().State == "on"
+	return s.GetState().State == stateOn
 }
 
 func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
@@ -33,7 +33,7 @@ func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 	logger.Debug("Turning on virtual switch", entityID)
 
 	data := map[string]any{
-		"entity_id": []string{s.GetID()},
+		serviceDataEntityID: []string{s.GetID()},
 	}
 
 	for _, attribute := range attributes {
@@ -44,8 +44,8 @@ func (s *InputBoolean) TurnOn(attributes ...map[string]any) error {
 
 	_, err := s.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
-		Domain:  "input_boolean",
-		Service: "turn_on",
+		Domain:  domainInputBoolean,
+		Service: serviceTurnOn,
 		Data:    data,
 	})
 	if err != nil {
@@ -68,10 +68,10 @@ func (s *InputBoolean) TurnOff() error {
 
 	_, err := s.connection.CallService(hassws.CallServiceRequest{
 		Type:    hassws.MessageTypeCallService,
-		Domain:  "input_boolean",
-		Service: "turn_off",
+		Domain:  domainInputBoolean,
+		Service: serviceTurnOff,
 		Data: map[string]any{
-			"entity_id": []string{s.GetID()},
+			serviceDataEntityID: []string{s.GetID()},
 		},
 	})
 	if err != nil {

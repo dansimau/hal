@@ -8,6 +8,8 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const brightnessAttr = "brightness"
+
 func TestState_Update(t *testing.T) {
 	t.Parallel()
 
@@ -33,13 +35,13 @@ func TestState_Update(t *testing.T) {
 		t.Parallel()
 
 		s := homeassistant.State{
-			Attributes: map[string]any{"brightness": float64(100)},
+			Attributes: map[string]any{brightnessAttr: float64(100)},
 		}
 		s.Update(homeassistant.State{
 			Attributes: map[string]any{"color": "red"},
 		})
 
-		assert.Equal(t, s.Attributes["brightness"], float64(100))
+		assert.Equal(t, s.Attributes[brightnessAttr], float64(100))
 		assert.Equal(t, s.Attributes["color"], "red")
 	})
 
@@ -47,13 +49,13 @@ func TestState_Update(t *testing.T) {
 		t.Parallel()
 
 		s := homeassistant.State{
-			Attributes: map[string]any{"brightness": float64(100)},
+			Attributes: map[string]any{brightnessAttr: float64(100)},
 		}
 		s.Update(homeassistant.State{
-			Attributes: map[string]any{"brightness": float64(200)},
+			Attributes: map[string]any{brightnessAttr: float64(200)},
 		})
 
-		assert.Equal(t, s.Attributes["brightness"], float64(200))
+		assert.Equal(t, s.Attributes[brightnessAttr], float64(200))
 	})
 
 	t.Run("initialises attributes map when nil", func(t *testing.T) {
@@ -61,10 +63,10 @@ func TestState_Update(t *testing.T) {
 
 		s := homeassistant.State{}
 		s.Update(homeassistant.State{
-			Attributes: map[string]any{"brightness": float64(50)},
+			Attributes: map[string]any{brightnessAttr: float64(50)},
 		})
 
-		assert.Equal(t, s.Attributes["brightness"], float64(50))
+		assert.Equal(t, s.Attributes[brightnessAttr], float64(50))
 	})
 
 	t.Run("updates timestamps when set", func(t *testing.T) {

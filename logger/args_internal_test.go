@@ -8,6 +8,8 @@ import (
 )
 
 func TestLoggingWithArgs(t *testing.T) {
+	t.Parallel()
+
 	// Create temporary database
 	db, err := store.Open(":memory:")
 	if err != nil {
@@ -20,16 +22,20 @@ func TestLoggingWithArgs(t *testing.T) {
 
 	// Test logging with various args
 	service.Info("User logged in", "user.test", "user_id", 123, "action", "login", "ip", "192.168.1.1")
-	service.Error("Database connection failed", "db.primary", "table", "users", "error", "connection timeout", "retry_count", 3)
+	service.Error("Database connection failed", "db.primary",
+		"table", "users", "error", "connection timeout", "retry_count", 3)
 	service.Debug("Processing item", "item.abc123", "item_id", "abc123", "status", "pending", "priority", "high")
-	service.Warn("Rate limit exceeded", "", "endpoint", "/api/users", "rate", "100/min", "user_agent", "Mozilla/5.0 Chrome")
+	service.Warn("Rate limit exceeded", "",
+		"endpoint", "/api/users", "rate", "100/min", "user_agent", "Mozilla/5.0 Chrome")
 
 	// Wait for async writes to complete
 	db.WaitForWrites()
 
 	// Verify logs were written to database with args
 	var logs []store.Log
-	if err := db.Order("id").Find(&logs).Error; err != nil {
+
+	err = db.Order("id").Find(&logs).Error
+	if err != nil {
 		t.Fatalf("Failed to query logs: %v", err)
 	}
 
@@ -42,12 +48,14 @@ func TestLoggingWithArgs(t *testing.T) {
 	if logs[0].LogText != expectedText1 {
 		t.Errorf("Expected log text '%s', got '%s'", expectedText1, logs[0].LogText)
 	}
+
 	if logs[0].EntityID != "user.test" {
 		t.Errorf("Expected entity ID 'user.test', got '%s'", logs[0].EntityID)
 	}
 
 	// Check second log with args including quoted values
-	expectedText2 := "Database connection failed entity_id=db.primary table=users error=\"connection timeout\" retry_count=3"
+	expectedText2 := "Database connection failed entity_id=db.primary table=users " +
+		"error=\"connection timeout\" retry_count=3"
 	if logs[1].LogText != expectedText2 {
 		t.Errorf("Expected log text '%s', got '%s'", expectedText2, logs[1].LogText)
 	}
@@ -63,12 +71,15 @@ func TestLoggingWithArgs(t *testing.T) {
 	if logs[3].LogText != expectedText4 {
 		t.Errorf("Expected log text '%s', got '%s'", expectedText4, logs[3].LogText)
 	}
+
 	if logs[3].EntityID != "" {
 		t.Errorf("Expected empty entity ID, got '%s'", logs[3].EntityID)
 	}
 }
 
 func TestFormatArgs(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		args     []any
@@ -103,6 +114,8 @@ func TestFormatArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			result := formatArgs(tt.args...)
 			if result != tt.expected {
 				t.Errorf("formatArgs() = '%s', expected '%s'", result, tt.expected)

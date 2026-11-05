@@ -10,9 +10,9 @@ func NewBinarySensor(id string) *BinarySensor {
 }
 
 func (s *BinarySensor) IsOff() bool {
-	return s.GetState().State == "off"
+	return s.GetState().State == stateOff
 }
 
 func (s *BinarySensor) IsOn() bool {
-	return s.GetState().State == "on"
+	return s.GetState().State == stateOn
 }

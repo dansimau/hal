@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func getShortFunctionName(i interface{}) string {
+func getShortFunctionName(i any) string {
 	fullName := runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
 	// Split by dots and get the last element
 	parts := strings.Split(fullName, ".")

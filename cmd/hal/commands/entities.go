@@ -1,8 +1,9 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strconv"
 	"time"
 
@@ -12,13 +13,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// errEntityNotFound is returned when the requested entity is not in the database.
+var errEntityNotFound = errors.New("entity not found")
+
 type EntitySummary struct {
 	ID         string
 	LastUpdate time.Time
 	LogCount   int64
 }
 
-// NewEntitiesCmd creates the entities command
+// NewEntitiesCmd creates the entities command.
 func NewEntitiesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "entities",
@@ -28,8 +32,8 @@ func NewEntitiesCmd() *cobra.Command {
 Shows entity ID, type, last updated timestamp, and count of log entries for each entity.`,
 		Example: `  hal entities              # Show all entities
   hal entities show light.kitchen  # Show specific entity state`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEntitiesCommand()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runEntitiesCommand(cmd.OutOrStdout())
 		},
 	}
 
@@ -42,15 +46,16 @@ Shows entity ID, type, last updated timestamp, and count of log entries for each
   hal entities show sensor.temperature`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runShowEntityCommand(args[0])
+			return runShowEntityCommand(cmd.OutOrStdout(), args[0])
 		},
 	}
 
 	cmd.AddCommand(showCmd)
+
 	return cmd
 }
 
-func runEntitiesCommand() error {
+func runEntitiesCommand(out io.Writer) error {
 	// Open database connection using default path
 	db, err := store.Open("sqlite.db")
 	if err != nil {
@@ -63,7 +68,8 @@ func runEntitiesCommand() error {
 	// Query entities and join with log counts
 	err = db.Table("entities").
 		Select("entities.id, entities.updated_at as last_update, COALESCE(log_counts.count, 0) as log_count").
-		Joins("LEFT JOIN (SELECT entity_id, COUNT(*) as count FROM logs GROUP BY entity_id) as log_counts ON entities.id = log_counts.entity_id").
+		Joins("LEFT JOIN (SELECT entity_id, COUNT(*) as count FROM logs GROUP BY entity_id) as log_counts " +
+			"ON entities.id = log_counts.entity_id").
 		Order("entities.id").
 		Scan(&entities).Error
 	if err != nil {
@@ -71,16 +77,17 @@ func runEntitiesCommand() error {
 	}
 
 	// Print results in table format
-	return printEntitiesTable(entities)
+	return printEntitiesTable(out, entities)
 }
 
-func printEntitiesTable(entities []EntitySummary) error {
+func printEntitiesTable(out io.Writer, entities []EntitySummary) error {
 	if len(entities) == 0 {
-		fmt.Println("No entities found")
+		fmt.Fprintln(out, "No entities found")
+
 		return nil
 	}
 
-	table := tablewriter.NewWriter(os.Stdout)
+	table := tablewriter.NewWriter(out)
 	table.Header("Entity ID", "Last Updated", "Log Entries")
 
 	for _, entity := range entities {
@@ -97,7 +104,7 @@ func printEntitiesTable(entities []EntitySummary) error {
 	return table.Render()
 }
 
-func runShowEntityCommand(entityID string) error {
+func runShowEntityCommand(out io.Writer, entityID string) error {
 	// Open database connection using default path
 	db, err := store.Open("sqlite.db")
 	if err != nil {
@@ -106,16 +113,17 @@ func runShowEntityCommand(entityID string) error {
 
 	// Query for the specific entity
 	var entity store.Entity
+
 	err = db.Where("id = ?", entityID).First(&entity).Error
 	if err != nil {
-		return fmt.Errorf("entity not found: %s", entityID)
+		return fmt.Errorf("%w: %s", errEntityNotFound, entityID)
 	}
 
 	// Pretty print the entity state as JSON
-	return printEntityStateJSON(entity)
+	return printEntityStateJSON(out, entity)
 }
 
-func printEntityStateJSON(entity store.Entity) error {
+func printEntityStateJSON(out io.Writer, entity store.Entity) error {
 	// Use prettyjson to format and colorize the output
 	formatter := prettyjson.NewFormatter()
 	formatter.Indent = 2
@@ -125,7 +133,7 @@ func printEntityStateJSON(entity store.Entity) error {
 		return fmt.Errorf("failed to format entity data: %w", err)
 	}
 
-	fmt.Println(string(coloredJSON))
+	fmt.Fprintln(out, string(coloredJSON))
 
 	return nil
 }

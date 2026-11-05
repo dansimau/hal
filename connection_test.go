@@ -21,20 +21,20 @@ func TestConnection(t *testing.T) {
 	defer cleanup()
 
 	// Create test entity and register it
-	entity := hal.NewEntity("test.entity")
+	entity := hal.NewEntity(testEntityID)
 	conn.RegisterEntities(entity)
 
 	// Send state change event
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "on"},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOn},
 		},
 	})
 
 	testutil.WaitFor(t, "verify entity state was updated", func() bool {
-		return entity.GetState().State == "on"
+		return entity.GetState().State == stateOn
 	}, func() {
 		spew.Dump(entity.GetID(), entity.GetState())
 	})
@@ -48,7 +48,7 @@ func TestLoopProtection(t *testing.T) {
 
 	var automationTriggered atomic.Int32
 
-	testEntity := hal.NewEntity("test.entity")
+	testEntity := hal.NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	conn.RegisterAutomations(
@@ -62,10 +62,10 @@ func TestLoopProtection(t *testing.T) {
 
 	// This one should be ignored because it is from the same user
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "off"},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOff},
 		},
 		Context: homeassistant.EventMessageContext{
 			UserID: testutil.TestUserID,
@@ -74,10 +74,10 @@ func TestLoopProtection(t *testing.T) {
 
 	// This one should cause the automation to be triggered
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "on"},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOn},
 		},
 	})
 
@@ -98,7 +98,7 @@ func TestEventsProcessedInOrder(t *testing.T) {
 	conn, server, cleanup := testutil.NewClientServer(t)
 	defer cleanup()
 
-	testEntity := hal.NewEntity("test.entity")
+	testEntity := hal.NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	var (
@@ -112,19 +112,20 @@ func TestEventsProcessedInOrder(t *testing.T) {
 			WithEntities(testEntity).
 			WithAction(func(_ context.Context, e hal.EntityInterface) {
 				mu.Lock()
+
 				observed = append(observed, e.GetState().State)
 				mu.Unlock()
 			}),
 	)
 
-	const n = 50
+	const eventCount = 50
 
-	expected := make([]string, 0, n)
+	expected := make([]string, 0, eventCount)
 
-	for i := range n {
-		state := "on"
+	for i := range eventCount {
+		state := stateOn
 		if i%2 == 1 {
-			state = "off"
+			state = stateOff
 		}
 
 		expected = append(expected, state)
@@ -132,9 +133,9 @@ func TestEventsProcessedInOrder(t *testing.T) {
 		// Zero timestamps so the staleness guard never applies, isolating the
 		// ordering behaviour of the transport layer.
 		server.SendEvent(homeassistant.Event{
-			EventType: "state_changed",
+			EventType: homeassistant.EventTypeStateChanged,
 			EventData: homeassistant.EventData{
-				EntityID: "test.entity",
+				EntityID: testEntityID,
 				NewState: &homeassistant.State{State: state},
 			},
 		})
@@ -144,7 +145,7 @@ func TestEventsProcessedInOrder(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		return len(observed) == n
+		return len(observed) == eventCount
 	}, func() {
 		mu.Lock()
 		defer mu.Unlock()
@@ -156,7 +157,7 @@ func TestEventsProcessedInOrder(t *testing.T) {
 	defer mu.Unlock()
 
 	assert.DeepEqual(t, expected, observed)
-	assert.Equal(t, expected[n-1], testEntity.GetState().State)
+	assert.Equal(t, expected[eventCount-1], testEntity.GetState().State)
 }
 
 // TestStaleStateIgnored verifies that a state update carrying an older
@@ -170,7 +171,7 @@ func TestStaleStateIgnored(t *testing.T) {
 
 	var automationTriggered atomic.Int32
 
-	testEntity := hal.NewEntity("test.entity")
+	testEntity := hal.NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	conn.RegisterAutomations(
@@ -188,29 +189,29 @@ func TestStaleStateIgnored(t *testing.T) {
 
 	// Newer "off" state (the truth).
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "off", LastUpdated: t2},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOff, LastUpdated: t2},
 		},
 	})
 
 	// Older "on" state arriving out of order - must be dropped.
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "on", LastUpdated: t1},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOn, LastUpdated: t1},
 		},
 	})
 
 	// Newer "off" barrier: events are delivered in order, so once this fires the
 	// stale "on" above has definitely been processed (and dropped).
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "off", LastUpdated: t3},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOff, LastUpdated: t3},
 		},
 	})
 
@@ -221,7 +222,7 @@ func TestStaleStateIgnored(t *testing.T) {
 	})
 
 	// The stale "on" neither changed the state nor fired an automation.
-	assert.Equal(t, "off", testEntity.GetState().State)
+	assert.Equal(t, stateOff, testEntity.GetState().State)
 	assert.Equal(t, int32(2), automationTriggered.Load())
 }
 
@@ -235,7 +236,7 @@ func TestNilStateLeavesStateUnchanged(t *testing.T) {
 
 	var automationTriggered atomic.Int32
 
-	testEntity := hal.NewEntity("test.entity")
+	testEntity := hal.NewEntity(testEntityID)
 	conn.RegisterEntities(testEntity)
 
 	conn.RegisterAutomations(
@@ -251,18 +252,18 @@ func TestNilStateLeavesStateUnchanged(t *testing.T) {
 	t2 := time.Date(2026, 7, 17, 23, 0, 30, 0, time.UTC)
 
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "on", LastUpdated: t1},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOn, LastUpdated: t1},
 		},
 	})
 
 	// nil NewState must be ignored, not overwrite the stored state.
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
+			EntityID: testEntityID,
 			NewState: nil,
 		},
 	})
@@ -270,10 +271,10 @@ func TestNilStateLeavesStateUnchanged(t *testing.T) {
 	// Newer barrier so we can deterministically wait for the nil event to have
 	// been processed.
 	server.SendEvent(homeassistant.Event{
-		EventType: "state_changed",
+		EventType: homeassistant.EventTypeStateChanged,
 		EventData: homeassistant.EventData{
-			EntityID: "test.entity",
-			NewState: &homeassistant.State{State: "on", LastUpdated: t2},
+			EntityID: testEntityID,
+			NewState: &homeassistant.State{State: stateOn, LastUpdated: t2},
 		},
 	})
 
@@ -284,6 +285,6 @@ func TestNilStateLeavesStateUnchanged(t *testing.T) {
 	})
 
 	// State survived the nil event, and the nil event fired no automation.
-	assert.Equal(t, "on", testEntity.GetState().State)
+	assert.Equal(t, stateOn, testEntity.GetState().State)
 	assert.Equal(t, int32(2), automationTriggered.Load())
 }

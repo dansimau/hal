@@ -21,10 +21,23 @@ const (
 	maxBatch = 500
 	// dropReportInterval rate-limits warnings about dropped writes.
 	dropReportInterval = 30 * time.Second
-	// busyRetryMin and busyRetryMax bound the backoff between attempts to commit
-	// a batch while the database is locked by another connection.
-	busyRetryMin = time.Second
-	busyRetryMax = 30 * time.Second
+	// busyRetryInitial and busyRetryCap bound the backoff between attempts to
+	// commit a batch while the database is locked by another connection: the
+	// delay starts at busyRetryInitial and is multiplied by busyRetryMultiplier
+	// after each failed attempt, up to busyRetryCap.
+	busyRetryInitial    = time.Second
+	busyRetryCap        = 30 * time.Second
+	busyRetryMultiplier = 2
+)
+
+const (
+	// sqlitePrimaryCodeMask extracts the primary result code from an extended
+	// SQLite result code (the low byte).
+	sqlitePrimaryCodeMask = 0xff
+	// sqliteBusy and sqliteLocked are the SQLITE_BUSY and SQLITE_LOCKED primary
+	// result codes.
+	sqliteBusy   = 5
+	sqliteLocked = 6
 )
 
 // DefaultFlushInterval is how long the writer waits after the first pending
@@ -55,7 +68,7 @@ type AsyncWriter struct {
 	db      *gorm.DB
 	queue   chan queuedOp
 	wg      sync.WaitGroup
-	ctx     context.Context
+	ctx     context.Context //nolint:containedctx // the writer owns the lifetime of its worker goroutine
 	cancel  context.CancelFunc
 	started bool
 	mu      sync.Mutex
@@ -118,8 +131,92 @@ func (aw *AsyncWriter) Start() {
 
 	go func() {
 		defer aw.wg.Done()
+
 		aw.processWrites()
 	}()
+}
+
+// Enqueue adds a write operation to the queue for asynchronous execution. It
+// never blocks: if the queue is full the operation is dropped.
+func (aw *AsyncWriter) Enqueue(op WriteOperation) {
+	if aw.runSyncIfNotRunning(op) {
+		return
+	}
+
+	// If the writer is already shutting down, run synchronously as a last resort.
+	// This must be checked before the queue send below: once the context is
+	// cancelled the worker has stopped draining the queue, so an op that landed
+	// in the (still-writable) buffered queue would never run. A plain two-case
+	// select would pick between the ready queue-send and ctx.Done() at random,
+	// which both drops writes and can wedge WaitForWrites forever.
+	select {
+	case <-aw.ctx.Done():
+		err := op(aw.db)
+		if err != nil {
+			slog.Error("Database write failed (writer shutdown)", "error", err)
+		}
+
+		return
+	default:
+	}
+
+	select {
+	case aw.queue <- queuedOp{op: op}:
+		// Write queued successfully
+	default:
+		aw.recordDrop()
+	}
+}
+
+// EnqueueEntityState records the latest state for an entity to be written
+// asynchronously. Repeated updates for the same entity before the next write are
+// coalesced, and entity states are never dropped.
+func (aw *AsyncWriter) EnqueueEntityState(id string, state *homeassistant.State) {
+	entity := &Entity{ID: id, State: state}
+
+	if aw.runSyncIfNotRunning(upsertEntity(entity)) {
+		return
+	}
+
+	aw.entityMu.Lock()
+	aw.entityPending[id] = entity
+	aw.entityMu.Unlock()
+
+	select {
+	case aw.entitySignal <- struct{}{}:
+	default:
+		// Writer already signalled
+	}
+}
+
+// Dropped returns the total number of write operations dropped because the
+// queue was full.
+func (aw *AsyncWriter) Dropped() int64 {
+	return aw.dropped.Load()
+}
+
+// Shutdown gracefully stops the async writer and flushes pending writes.
+func (aw *AsyncWriter) Shutdown() {
+	aw.cancel()
+	aw.wg.Wait()
+}
+
+// WaitForWrites blocks until all currently queued writes have been committed.
+// The batch is committed immediately rather than waiting for the flush
+// interval. This is primarily useful for testing.
+func (aw *AsyncWriter) WaitForWrites() {
+	noop := func(*gorm.DB) error { return nil }
+	if aw.runSyncIfNotRunning(noop) {
+		return
+	}
+
+	done := make(chan struct{})
+	select {
+	case aw.queue <- queuedOp{op: noop, done: done}:
+		<-done
+	case <-aw.ctx.Done():
+		// Writer is shutting down and flushes pending writes itself
+	}
 }
 
 // processWrites waits for a write to become pending, then collects a batch and
@@ -132,6 +229,7 @@ func (aw *AsyncWriter) processWrites() {
 		case <-aw.ctx.Done():
 			// Drain remaining writes before shutdown
 			aw.drainQueue()
+
 			return
 		case op := <-aw.queue:
 			first = &op
@@ -150,7 +248,8 @@ func (aw *AsyncWriter) processWrites() {
 func (aw *AsyncWriter) commitBatch(batch []queuedOp) {
 	defer closeDone(batch)
 
-	delay := busyRetryMin
+	delay := busyRetryInitial
+
 	for {
 		err := aw.writeBatch(batch)
 		if err == nil {
@@ -159,12 +258,14 @@ func (aw *AsyncWriter) commitBatch(batch []queuedOp) {
 
 		if !isBusy(err) {
 			slog.Error("Async database batch commit failed", "error", err, "operations", len(batch))
+
 			return
 		}
 
 		select {
 		case <-aw.ctx.Done():
-			if err := aw.writeBatch(batch); err != nil {
+			err := aw.writeBatch(batch)
+			if err != nil {
 				slog.Error("Async database batch commit failed during shutdown, dropping batch",
 					"error", err, "operations", len(batch))
 			}
@@ -176,29 +277,8 @@ func (aw *AsyncWriter) commitBatch(batch []queuedOp) {
 		slog.Warn("Database locked, retrying async write batch", "error", err,
 			"operations", len(batch), "retryIn", delay)
 
-		delay = min(delay*2, busyRetryMax)
+		delay = min(delay*busyRetryMultiplier, busyRetryCap)
 	}
-}
-
-// closeDone signals completion for any operations in batch that are waited on.
-func closeDone(batch []queuedOp) {
-	for _, q := range batch {
-		if q.done != nil {
-			close(q.done)
-		}
-	}
-}
-
-// isBusy reports whether err means the database is locked by another
-// connection (SQLITE_BUSY or SQLITE_LOCKED, including extended codes).
-func isBusy(err error) bool {
-	var coder interface{ Code() int }
-	if !errors.As(err, &coder) {
-		return false
-	}
-
-	code := coder.Code() & 0xff
-	return code == 5 || code == 6 // SQLITE_BUSY, SQLITE_LOCKED
 }
 
 // collectBatch gathers first (if non-nil) and operations arriving within the
@@ -268,25 +348,31 @@ func (aw *AsyncWriter) writeBatch(batch []queuedOp) error {
 
 	return aw.db.Transaction(func(tx *gorm.DB) error {
 		for _, q := range batch {
-			if err := tx.Exec("SAVEPOINT async_write").Error; err != nil {
+			err := tx.Exec("SAVEPOINT async_write").Error
+			if err != nil {
 				return err
 			}
 
-			if err := q.op(tx); err != nil {
+			err = q.op(tx)
+			if err != nil {
 				if isBusy(err) {
 					return err
 				}
 
 				slog.Error("Async database write failed", "error", err)
-				if err := tx.Exec("ROLLBACK TO SAVEPOINT async_write").Error; err != nil {
+
+				err = tx.Exec("ROLLBACK TO SAVEPOINT async_write").Error
+				if err != nil {
 					return err
 				}
 			}
 
-			if err := tx.Exec("RELEASE SAVEPOINT async_write").Error; err != nil {
+			err = tx.Exec("RELEASE SAVEPOINT async_write").Error
+			if err != nil {
 				return err
 			}
 		}
+
 		return nil
 	})
 }
@@ -298,38 +384,8 @@ func (aw *AsyncWriter) drainQueue() {
 		if len(batch) == 0 {
 			return
 		}
+
 		aw.commitBatch(batch)
-	}
-}
-
-// Enqueue adds a write operation to the queue for asynchronous execution. It
-// never blocks: if the queue is full the operation is dropped.
-func (aw *AsyncWriter) Enqueue(op WriteOperation) {
-	if aw.runSyncIfNotRunning(op) {
-		return
-	}
-
-	// If the writer is already shutting down, run synchronously as a last resort.
-	// This must be checked before the queue send below: once the context is
-	// cancelled the worker has stopped draining the queue, so an op that landed
-	// in the (still-writable) buffered queue would never run. A plain two-case
-	// select would pick between the ready queue-send and ctx.Done() at random,
-	// which both drops writes and can wedge WaitForWrites forever.
-	select {
-	case <-aw.ctx.Done():
-		if err := op(aw.db); err != nil {
-			slog.Error("Database write failed (writer shutdown)", "error", err)
-		}
-
-		return
-	default:
-	}
-
-	select {
-	case aw.queue <- queuedOp{op: op}:
-		// Write queued successfully
-	default:
-		aw.recordDrop()
 	}
 }
 
@@ -346,37 +402,12 @@ func (aw *AsyncWriter) runSyncIfNotRunning(op WriteOperation) bool {
 
 	// Execute synchronously if not started (shouldn't happen in normal operation)
 	// or shutting down
-	if err := op(aw.db); err != nil {
+	err := op(aw.db)
+	if err != nil {
 		slog.Error("Synchronous database write failed", "error", err)
 	}
+
 	return true
-}
-
-// EnqueueEntityState records the latest state for an entity to be written
-// asynchronously. Repeated updates for the same entity before the next write are
-// coalesced, and entity states are never dropped.
-func (aw *AsyncWriter) EnqueueEntityState(id string, state *homeassistant.State) {
-	entity := &Entity{ID: id, State: state}
-
-	if aw.runSyncIfNotRunning(upsertEntity(entity)) {
-		return
-	}
-
-	aw.entityMu.Lock()
-	aw.entityPending[id] = entity
-	aw.entityMu.Unlock()
-
-	select {
-	case aw.entitySignal <- struct{}{}:
-	default:
-		// Writer already signalled
-	}
-}
-
-// Dropped returns the total number of write operations dropped because the
-// queue was full.
-func (aw *AsyncWriter) Dropped() int64 {
-	return aw.dropped.Load()
 }
 
 // recordDrop counts a dropped write and logs a rate-limited warning. It logs via
@@ -386,7 +417,9 @@ func (aw *AsyncWriter) recordDrop() {
 	aw.droppedPending.Add(1)
 
 	now := time.Now().UnixNano()
+
 	last := aw.lastDropReport.Load()
+
 	if now-last < int64(dropReportInterval) || !aw.lastDropReport.CompareAndSwap(last, now) {
 		return
 	}
@@ -395,28 +428,26 @@ func (aw *AsyncWriter) recordDrop() {
 		"dropped", aw.droppedPending.Swap(0), "total", aw.dropped.Load())
 }
 
-// Shutdown gracefully stops the async writer and flushes pending writes.
-func (aw *AsyncWriter) Shutdown() {
-	aw.cancel()
-	aw.wg.Wait()
+// closeDone signals completion for any operations in batch that are waited on.
+func closeDone(batch []queuedOp) {
+	for _, q := range batch {
+		if q.done != nil {
+			close(q.done)
+		}
+	}
 }
 
-// WaitForWrites blocks until all currently queued writes have been committed.
-// The batch is committed immediately rather than waiting for the flush
-// interval. This is primarily useful for testing.
-func (aw *AsyncWriter) WaitForWrites() {
-	noop := func(*gorm.DB) error { return nil }
-	if aw.runSyncIfNotRunning(noop) {
-		return
+// isBusy reports whether err means the database is locked by another
+// connection (SQLITE_BUSY or SQLITE_LOCKED, including extended codes).
+func isBusy(err error) bool {
+	var coder interface{ Code() int }
+	if !errors.As(err, &coder) {
+		return false
 	}
 
-	done := make(chan struct{})
-	select {
-	case aw.queue <- queuedOp{op: noop, done: done}:
-		<-done
-	case <-aw.ctx.Done():
-		// Writer is shutting down and flushes pending writes itself
-	}
+	code := coder.Code() & sqlitePrimaryCodeMask
+
+	return code == sqliteBusy || code == sqliteLocked
 }
 
 func upsertEntity(entity *Entity) WriteOperation {

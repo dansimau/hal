@@ -33,9 +33,12 @@ func TestHistogramQuantileMergesExactly(t *testing.T) {
 	whole := make(map[int32]int64)
 	minuteA := make(map[int32]int64)
 	minuteB := make(map[int32]int64)
+
 	for i := int64(1); i <= 10000; i++ {
 		b := store.HistogramBucket(i)
+
 		whole[b]++
+
 		if i%2 == 0 {
 			minuteA[b]++
 		} else {

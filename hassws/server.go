@@ -1,6 +1,7 @@
 package hassws
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -16,6 +17,19 @@ import (
 )
 
 const readHeaderTimeoutSeconds = 10
+
+const (
+	// serviceDataEntityID is the service_data key carrying the target entity IDs.
+	serviceDataEntityID = "entity_id"
+
+	// serviceTurnOn and serviceTurnOff are the Home Assistant services the mock
+	// server translates into state updates.
+	serviceTurnOn  = "turn_on"
+	serviceTurnOff = "turn_off"
+
+	// mockHAVersion is the Home Assistant version the mock server reports.
+	mockHAVersion = "2024.1.0"
+)
 
 // Server is a Home Assistant websocket API server, for testing.
 type Server struct {
@@ -46,14 +60,6 @@ type Server struct {
 	lock sync.RWMutex
 }
 
-// SetStates sets the entity states the server returns for GetStates requests.
-func (s *Server) SetStates(states []homeassistant.State) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	s.states = states
-}
-
 func NewServer(validUsers map[string]string) (*Server, error) {
 	server := &Server{
 		http: &http.Server{
@@ -66,7 +72,7 @@ func NewServer(validUsers map[string]string) (*Server, error) {
 
 	server.http.Handler = http.HandlerFunc(server.handler)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +80,105 @@ func NewServer(validUsers map[string]string) (*Server, error) {
 	server.listener = listener
 
 	go func() {
-		if err := server.http.Serve(server.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		err := server.http.Serve(server.listener)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			panic(err)
 		}
 	}()
 
 	return server, nil
+}
+
+// SetStates sets the entity states the server returns for GetStates requests.
+func (s *Server) SetStates(states []homeassistant.State) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	s.states = states
+}
+
+func (s *Server) Close() error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	return s.websocket.WriteMessage(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"),
+	)
+}
+
+// DisconnectClient forcibly closes the WebSocket connection to simulate network failure.
+// Unlike Close(), this does not send a graceful close message.
+// Returns nil if connection is already closed.
+func (s *Server) DisconnectClient() error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	if s.websocket == nil {
+		return nil
+	}
+
+	// Attempt to close - ignore errors if already closed
+	_ = s.websocket.Close()
+
+	return nil
+}
+
+func (s *Server) ListenAddress() string {
+	return s.listener.Addr().String()
+}
+
+func (s *Server) SendMessage(message any) {
+	msgBytes, err := json.Marshal(message)
+	if err != nil {
+		panic(err)
+	}
+
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	err = s.websocket.WriteMessage(websocket.TextMessage, msgBytes)
+	if err != nil {
+		panic(err)
+	}
+
+	s.messagesSent = append(s.messagesSent, msgBytes)
+
+	log.Printf("[Server] Sent message: %s", string(msgBytes))
+}
+
+func (s *Server) MessagesReceived() [][]byte {
+	return s.messagesReceived
+}
+
+func (s *Server) MessagesSent() [][]byte {
+	return s.messagesSent
+}
+
+// SendEvent sends a state change event to the server.
+func (s *Server) SendEvent(event homeassistant.Event) {
+	for _, id := range s.subscribers {
+		s.SendMessage(EventMessage{
+			ID:    id,
+			Type:  MessageTypeEvent,
+			Event: event,
+		})
+	}
+}
+
+// SetRespondToPings controls whether the server replies to ping messages.
+// Passing false simulates a "stuck" connection that remains open but stops
+// delivering data.
+func (s *Server) SetRespondToPings(respond bool) {
+	s.respondToPings.Store(respond)
+}
+
+// GetSubscriptionCount returns the number of active event subscriptions.
+func (s *Server) GetSubscriptionCount() int {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	return len(s.subscribers)
 }
 
 func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +195,8 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 
 	defer conn.Close()
 
-	if err := s.handleAuthentication(conn); err != nil {
+	err = s.handleAuthentication(conn)
+	if err != nil {
 		logger.Error("Authentication failed", "", "error", err)
 
 		return
@@ -119,7 +219,8 @@ func (s *Server) listen() {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				log.Println("[Server] Received close message, bye")
 
-				if err := s.shutdown(); err != nil {
+				err := s.shutdown()
+				if err != nil {
 					logger.Error("Error during shutdown", "", "error", err)
 				}
 
@@ -139,7 +240,9 @@ func (s *Server) listen() {
 
 		// Parse as CommandMessage
 		var cmd CommandMessage
-		if err := json.Unmarshal(messageBytes, &cmd); err != nil {
+
+		err = json.Unmarshal(messageBytes, &cmd)
+		if err != nil {
 			panic(err)
 		}
 
@@ -152,19 +255,31 @@ func (s *Server) listen() {
 			})
 
 			var callServiceMessage CallServiceRequest
-			if err := json.Unmarshal(messageBytes, &callServiceMessage); err != nil {
+
+			err := json.Unmarshal(messageBytes, &callServiceMessage)
+			if err != nil {
 				panic(err)
 			}
 
-			entityIDs := []string{}
+			rawEntityIDs, ok := callServiceMessage.Data[serviceDataEntityID].([]any)
+			if !ok {
+				panic("[Server] call_service entity_id is not a list")
+			}
+
+			entityIDs := make([]string, 0, len(rawEntityIDs))
 			attributes := map[string]any{}
 
-			for _, entityID := range callServiceMessage.Data["entity_id"].([]interface{}) {
-				entityIDs = append(entityIDs, entityID.(string))
+			for _, rawEntityID := range rawEntityIDs {
+				entityID, ok := rawEntityID.(string)
+				if !ok {
+					panic("[Server] call_service entity_id entry is not a string")
+				}
+
+				entityIDs = append(entityIDs, entityID)
 			}
 
 			for k, v := range callServiceMessage.Data {
-				if k == "entity_id" {
+				if k == serviceDataEntityID {
 					continue
 				}
 
@@ -174,9 +289,9 @@ func (s *Server) listen() {
 			state := ""
 
 			switch callServiceMessage.Service {
-			case "turn_on":
+			case serviceTurnOn:
 				state = "on"
-			case "turn_off":
+			case serviceTurnOff:
 				state = "off"
 			}
 
@@ -259,15 +374,19 @@ func (s *Server) handleAuthentication(conn *websocket.Conn) error {
 	// Send auth_required message
 	authChallenge := AuthChallenge{
 		Type:      "auth_required",
-		HAVersion: "2024.1.0",
+		HAVersion: mockHAVersion,
 	}
-	if err := s.writeJSON(conn, authChallenge); err != nil {
+
+	err := s.writeJSON(conn, authChallenge)
+	if err != nil {
 		return err
 	}
 
 	// Wait for auth message
 	var authReq AuthRequest
-	if err := conn.ReadJSON(&authReq); err != nil {
+
+	err = conn.ReadJSON(&authReq)
+	if err != nil {
 		return err
 	}
 
@@ -277,8 +396,9 @@ func (s *Server) handleAuthentication(conn *websocket.Conn) error {
 		authResp := AuthResponse{
 			Type:      "auth_invalid",
 			Message:   "Invalid access token",
-			HAVersion: "2024.1.0",
+			HAVersion: mockHAVersion,
 		}
+
 		return s.writeJSON(conn, authResp)
 	}
 
@@ -287,36 +407,10 @@ func (s *Server) handleAuthentication(conn *websocket.Conn) error {
 
 	authResp := AuthResponse{
 		Type:      "auth_ok",
-		HAVersion: "2024.1.0",
+		HAVersion: mockHAVersion,
 	}
 
 	return s.writeJSON(conn, authResp)
-}
-
-func (s *Server) Close() error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	return s.websocket.WriteMessage(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"),
-	)
-}
-
-// DisconnectClient forcibly closes the WebSocket connection to simulate network failure.
-// Unlike Close(), this does not send a graceful close message.
-// Returns nil if connection is already closed.
-func (s *Server) DisconnectClient() error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.websocket == nil {
-		return nil
-	}
-
-	// Attempt to close - ignore errors if already closed
-	_ = s.websocket.Close()
-	return nil
 }
 
 func (s *Server) shutdown() error {
@@ -337,59 +431,4 @@ func (s *Server) shutdown() error {
 	}
 
 	return errors.Join(errs...)
-}
-
-func (s *Server) ListenAddress() string {
-	return s.listener.Addr().String()
-}
-
-func (s *Server) SendMessage(message any) {
-	msgBytes, err := json.Marshal(message)
-	if err != nil {
-		panic(err)
-	}
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if err := s.websocket.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
-		panic(err)
-	}
-
-	s.messagesSent = append(s.messagesSent, msgBytes)
-
-	log.Printf("[Server] Sent message: %s", string(msgBytes))
-}
-
-func (s *Server) MessagesReceived() [][]byte {
-	return s.messagesReceived
-}
-
-func (s *Server) MessagesSent() [][]byte {
-	return s.messagesSent
-}
-
-// SendEvent sends a state change event to the server.
-func (s *Server) SendEvent(event homeassistant.Event) {
-	for _, id := range s.subscribers {
-		s.SendMessage(EventMessage{
-			ID:    id,
-			Type:  MessageTypeEvent,
-			Event: event,
-		})
-	}
-}
-
-// SetRespondToPings controls whether the server replies to ping messages.
-// Passing false simulates a "stuck" connection that remains open but stops
-// delivering data.
-func (s *Server) SetRespondToPings(respond bool) {
-	s.respondToPings.Store(respond)
-}
-
-// GetSubscriptionCount returns the number of active event subscriptions.
-func (s *Server) GetSubscriptionCount() int {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	return len(s.subscribers)
 }

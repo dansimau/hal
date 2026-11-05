@@ -21,13 +21,13 @@ func TestLight_TurnOn_Registered(t *testing.T) {
 	light := hal.NewLight("light.test")
 	conn.RegisterEntities(light)
 
-	err := light.TurnOn(map[string]any{"brightness": float64(200)})
+	err := light.TurnOn(map[string]any{attrBrightness: float64(200)})
 	if err != nil {
 		t.Fatalf("TurnOn returned error: %v", err)
 	}
 
 	testutil.WaitFor(t, "light turned on", func() bool {
-		return light.GetState().State == "on"
+		return light.GetState().State == stateOn
 	}, func() {
 		spew.Dump(light.GetID(), light.GetState())
 	})
@@ -48,7 +48,7 @@ func TestLight_TurnOff_Registered(t *testing.T) {
 	}
 
 	testutil.WaitFor(t, "light turned off", func() bool {
-		return light.GetState().State == "off"
+		return light.GetState().State == stateOff
 	}, func() {
 		spew.Dump(light.GetID(), light.GetState())
 	})
@@ -63,13 +63,13 @@ func TestLight_TurnOnContext_Registered(t *testing.T) {
 	light := hal.NewLight("light.test")
 	conn.RegisterEntities(light)
 
-	err := light.TurnOnContext(context.Background(), map[string]any{"brightness": float64(128)})
+	err := light.TurnOnContext(context.Background(), map[string]any{attrBrightness: float64(128)})
 	if err != nil {
 		t.Fatalf("TurnOnContext returned error: %v", err)
 	}
 
 	testutil.WaitFor(t, "light turned on", func() bool {
-		return light.GetState().State == "on"
+		return light.GetState().State == stateOn
 	}, func() {
 		spew.Dump(light.GetID(), light.GetState())
 	})
@@ -90,7 +90,7 @@ func TestLight_TurnOffContext_Registered(t *testing.T) {
 	}
 
 	testutil.WaitFor(t, "light turned off", func() bool {
-		return light.GetState().State == "off"
+		return light.GetState().State == stateOff
 	}, func() {
 		spew.Dump(light.GetID(), light.GetState())
 	})
@@ -110,12 +110,13 @@ func TestLightGroup_ServicesRegistered(t *testing.T) {
 
 	group := hal.LightGroup{light1, light2}
 
-	if err := group.TurnOnContext(context.Background(), map[string]any{"brightness": float64(255)}); err != nil {
+	err := group.TurnOnContext(context.Background(), map[string]any{attrBrightness: float64(255)})
+	if err != nil {
 		t.Fatalf("group TurnOnContext returned error: %v", err)
 	}
 
 	testutil.WaitFor(t, "both lights on", func() bool {
-		return light1.GetState().State == "on" && light2.GetState().State == "on"
+		return light1.GetState().State == stateOn && light2.GetState().State == stateOn
 	}, func() {
 		spew.Dump(light1.GetState(), light2.GetState())
 	})
@@ -124,12 +125,13 @@ func TestLightGroup_ServicesRegistered(t *testing.T) {
 		t.Error("expected group IsOn to be true")
 	}
 
-	if err := group.TurnOffContext(context.Background()); err != nil {
+	err = group.TurnOffContext(context.Background())
+	if err != nil {
 		t.Fatalf("group TurnOffContext returned error: %v", err)
 	}
 
 	testutil.WaitFor(t, "both lights off", func() bool {
-		return light1.GetState().State == "off" && light2.GetState().State == "off"
+		return light1.GetState().State == stateOff && light2.GetState().State == stateOff
 	}, func() {
 		spew.Dump(light1.GetState(), light2.GetState())
 	})
@@ -148,8 +150,9 @@ func TestLightGroup_IsOff(t *testing.T) {
 
 		light1 := hal.NewLight("light.one")
 		light2 := hal.NewLight("light.two")
-		light1.SetState(homeassistant.State{State: "off"})
-		light2.SetState(homeassistant.State{State: "off"})
+
+		light1.SetState(homeassistant.State{State: stateOff})
+		light2.SetState(homeassistant.State{State: stateOff})
 
 		group := hal.LightGroup{light1, light2}
 		if !group.IsOff() {
@@ -162,8 +165,9 @@ func TestLightGroup_IsOff(t *testing.T) {
 
 		light1 := hal.NewLight("light.one")
 		light2 := hal.NewLight("light.two")
-		light1.SetState(homeassistant.State{State: "off"})
-		light2.SetState(homeassistant.State{State: "on"})
+
+		light1.SetState(homeassistant.State{State: stateOff})
+		light2.SetState(homeassistant.State{State: stateOn})
 
 		group := hal.LightGroup{light1, light2}
 		if group.IsOff() {

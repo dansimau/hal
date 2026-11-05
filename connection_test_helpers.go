@@ -9,9 +9,20 @@ import (
 )
 
 const (
-	testUserID   = "d8e8fca2dc0f896fd7cb4cb0031ba249"
-	pollInterval = 100 * time.Millisecond
-	waitTimeout  = 3 * time.Second
+	testUserID         = "d8e8fca2dc0f896fd7cb4cb0031ba249"
+	testToken          = "test-token"
+	testEntityID       = "test.entity"
+	memoryDatabasePath = ":memory:"
+	pollInterval       = 100 * time.Millisecond
+	waitTimeout        = 3 * time.Second
+
+	// fastReconnectInterval is the short reconnect interval used so tests
+	// observing reconnection do not wait for the production default.
+	fastReconnectInterval = 100 * time.Millisecond
+
+	// connectionSettleDelay is how long newClientServerWithConfig waits for the
+	// background connection to establish before returning.
+	connectionSettleDelay = 100 * time.Millisecond
 )
 
 // waitFor waits for the given function to return true.
@@ -38,9 +49,11 @@ func waitFor(t *testing.T, name string, callbackFn func() bool, onFailed func())
 
 // newFastReconnectClientServer creates a test connection with fast reconnection interval (100ms).
 func newFastReconnectClientServer(t *testing.T) (*Connection, *hassws.Server, func()) {
+	t.Helper()
+
 	return newClientServerWithConfig(t, Config{
-		DatabasePath:      ":memory:",
-		ReconnectInterval: 100 * time.Millisecond,
+		DatabasePath:      memoryDatabasePath,
+		ReconnectInterval: fastReconnectInterval,
 	})
 }
 
@@ -50,7 +63,7 @@ func newClientServerWithConfig(t *testing.T, cfg Config) (*Connection, *hassws.S
 
 	// Create test server with valid users map
 	validUsers := map[string]string{
-		"test-token": testUserID,
+		testToken: testUserID,
 	}
 	server, err := hassws.NewServer(validUsers)
 	assert.NilError(t, err)
@@ -59,32 +72,36 @@ func newClientServerWithConfig(t *testing.T, cfg Config) (*Connection, *hassws.S
 	if cfg.HomeAssistant.Host == "" {
 		cfg.HomeAssistant.Host = server.ListenAddress()
 	}
+
 	if cfg.HomeAssistant.Token == "" {
-		cfg.HomeAssistant.Token = "test-token"
+		cfg.HomeAssistant.Token = testToken
 	}
+
 	if cfg.HomeAssistant.UserID == "" {
 		cfg.HomeAssistant.UserID = testUserID
 	}
+
 	if cfg.DatabasePath == "" {
-		cfg.DatabasePath = ":memory:"
+		cfg.DatabasePath = memoryDatabasePath
 	}
 
 	// Create client and connection
 	conn := NewConnection(cfg)
 
 	// Create test entity and register it
-	entity := NewEntity("test.entity")
+	entity := NewEntity(testEntityID)
 	conn.RegisterEntities(entity)
 
 	// Start connection in background (Start is now blocking)
 	go func() {
-		if err := conn.Start(); err != nil {
+		err := conn.Start()
+		if err != nil {
 			t.Errorf("Start() failed: %v", err)
 		}
 	}()
 
 	// Give connection time to establish
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(connectionSettleDelay)
 
 	return conn, server, func() {
 		conn.Close()

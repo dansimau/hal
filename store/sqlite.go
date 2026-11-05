@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/dansimau/hal/homeassistant"
-
 	"github.com/glebarez/sqlite" // Pure go SQLite driver, checkout https://github.com/glebarez/sqlite for details
 	"gorm.io/gorm"
 )
@@ -15,6 +14,7 @@ import (
 // Store wraps the database connection and async writer.
 type Store struct {
 	*gorm.DB
+
 	asyncWriter *AsyncWriter
 	untrack     func() // forgets the database file as open in this process
 }
@@ -22,7 +22,7 @@ type Store struct {
 // openMu serialises opening databases, so the copy-on-write check for one Open
 // never opens (and closes) a database file while another Open is having SQLite
 // open the same file. See openFiles.
-var openMu sync.Mutex
+var openMu sync.Mutex //nolint:gochecknoglobals // process-wide lock serialising Open across all stores
 
 func Open(path string) (*Store, error) {
 	openMu.Lock()
@@ -49,6 +49,7 @@ func Open(path string) (*Store, error) {
 	// (and, in WAL mode, avoids SQLITE_BUSY_SNAPSHOT on read-to-write upgrades).
 	dsn := path + "?_pragma=auto_vacuum(INCREMENTAL)&_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_txlock=immediate"
+
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, err
@@ -61,14 +62,15 @@ func Open(path string) (*Store, error) {
 
 	// fail closes the database before forgetting it as open in this process:
 	// while SQLite has the file open, the copy-on-write check must not run on it.
-	fail := func(err error) (*Store, error) {
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
+	fail := func(err error) error {
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
 			_ = sqlDB.Close()
 		}
 
 		untrack()
 
-		return nil, err
+		return err
 	}
 
 	// In-memory SQLite databases are scoped to a single connection: every new
@@ -76,17 +78,18 @@ func Open(path string) (*Store, error) {
 	// one connection is invisible to a query that lands on another ("no such
 	// table"). Pin the pool to a single connection so the whole Store shares one
 	// in-memory database. File-backed databases keep the default pool.
-	if strings.Contains(path, ":memory:") {
+	if strings.Contains(path, memoryDatabase) {
 		sqlDB, err := db.DB()
 		if err != nil {
-			return fail(err)
+			return nil, fail(err)
 		}
 
 		sqlDB.SetMaxOpenConns(1)
 	}
 
-	if err := db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{}); err != nil {
-		return fail(err)
+	err = db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{})
+	if err != nil {
+		return nil, fail(err)
 	}
 
 	// Create and start async writer
@@ -110,6 +113,7 @@ func IncrementalVacuum(db *gorm.DB, pages int) error {
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
@@ -155,12 +159,14 @@ func (s *Store) WaitForWrites() {
 // Close gracefully shuts down the store, flushing pending writes.
 func (s *Store) Close() error {
 	s.asyncWriter.Shutdown()
+
 	sqlDB, err := s.DB.DB()
 	if err != nil {
 		return err
 	}
 
 	err = sqlDB.Close()
+
 	if s.untrack != nil {
 		s.untrack()
 	}

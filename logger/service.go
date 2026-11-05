@@ -17,7 +17,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// BufferedLog represents a log entry waiting to be written to database
+const (
+	// defaultPruneInterval is how often old logs are pruned from the database.
+	defaultPruneInterval = 24 * time.Hour
+	// defaultRetentionTime is how long logs are kept before being pruned.
+	defaultRetentionTime = 7 * 24 * time.Hour
+	// defaultBufferSize is the number of log entries held in the circular
+	// buffer while no database is configured.
+	defaultBufferSize = 1000
+
+	// entityIDLogKey is the slog attribute key for the entity ID. It has the
+	// same name as the context key so console output and context lookups agree.
+	entityIDLogKey = string(EntityIDKey)
+	// automationLogKey is the slog attribute key for the automation name.
+	automationLogKey = "automation"
+)
+
+// BufferedLog represents a log entry waiting to be written to database.
 type BufferedLog struct {
 	Timestamp time.Time
 	Level     string
@@ -25,7 +41,7 @@ type BufferedLog struct {
 	LogText   string
 }
 
-// Service handles logging to both console and database
+// Service handles logging to both console and database.
 type Service struct {
 	db            *store.Store
 	pruneInterval time.Duration // How often to prune old logs (default: daily)
@@ -45,26 +61,27 @@ type Service struct {
 	errorCount int
 }
 
-// NewService creates a new logging service
+// NewService creates a new logging service.
 func NewService() *Service {
 	return &Service{
-		pruneInterval: 24 * time.Hour, // Prune daily
-		retentionTime: 7 * 24 * time.Hour,
+		pruneInterval: defaultPruneInterval,
+		retentionTime: defaultRetentionTime,
 		stopChan:      make(chan struct{}),
 		level:         slog.LevelInfo, // Default to Info level
-		bufferSize:    1000,
-		buffer:        make([]BufferedLog, 1000),
+		bufferSize:    defaultBufferSize,
+		buffer:        make([]BufferedLog, defaultBufferSize),
 	}
 }
 
-// NewServiceWithDB creates a new logging service with database
+// NewServiceWithDB creates a new logging service with database.
 func NewServiceWithDB(db *store.Store) *Service {
 	s := NewService()
 	s.SetDatabase(db)
+
 	return s
 }
 
-// SetDatabase sets the database for the logging service and flushes buffered logs
+// SetDatabase sets the database for the logging service and flushes buffered logs.
 func (s *Service) SetDatabase(db *store.Store) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,7 +91,8 @@ func (s *Service) SetDatabase(db *store.Store) {
 	// Flush buffered logs to database asynchronously
 	if s.bufferCount > 0 {
 		flushCount := s.bufferCount
-		for i := 0; i < s.bufferCount; i++ {
+
+		for i := range s.bufferCount {
 			idx := (s.bufferHead - s.bufferCount + i + s.bufferSize) % s.bufferSize
 			bufferedLog := s.buffer[idx]
 			log := store.Log{
@@ -83,23 +101,27 @@ func (s *Service) SetDatabase(db *store.Store) {
 				EntityID:  bufferedLog.EntityID,
 				LogText:   bufferedLog.LogText,
 			}
+
 			s.db.EnqueueWrite(func(db *gorm.DB) error {
 				return db.Create(&log).Error
 			})
 		}
+
 		s.bufferCount = 0
+
 		slog.Info("Flushed buffered logs to database", "count", flushCount)
 	}
 }
 
-// SetLevel sets the minimum log level for database logging
+// SetLevel sets the minimum log level for database logging.
 func (s *Service) SetLevel(level slog.Level) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.level = level
 }
 
-// Start begins the log pruning goroutine
+// Start begins the log pruning goroutine.
 func (s *Service) Start() {
 	s.mu.Lock()
 	// Create a new stopChan if the previous one was closed
@@ -119,10 +141,11 @@ func (s *Service) Start() {
 	if hasDB {
 		go s.pruneLogs(stopChan)
 	}
+
 	slog.Info("Logging service started")
 }
 
-// Stop stops the logging service
+// Stop stops the logging service.
 func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,48 +160,52 @@ func (s *Service) Stop() {
 	}
 }
 
-// Info logs an info message to both console and database
+// Info logs an info message to both console and database.
 func (s *Service) Info(msg string, entityID string, args ...any) {
 	// Log to console using slog
 	if entityID != "" {
-		args = append([]any{"entity_id", entityID}, args...)
+		args = append([]any{entityIDLogKey, entityID}, args...)
 	}
+
 	slog.Info(msg, args...)
 
 	// Log to database
 	s.logToDatabase(slog.LevelInfo, msg, entityID, args...)
 }
 
-// Error logs an error message to both console and database
+// Error logs an error message to both console and database.
 func (s *Service) Error(msg string, entityID string, args ...any) {
 	// Log to console using slog
 	if entityID != "" {
-		args = append([]any{"entity_id", entityID}, args...)
+		args = append([]any{entityIDLogKey, entityID}, args...)
 	}
+
 	slog.Error(msg, args...)
 
 	// Log to database
 	s.logToDatabase(slog.LevelError, msg, entityID, args...)
 }
 
-// Debug logs a debug message to both console and database
+// Debug logs a debug message to both console and database.
 func (s *Service) Debug(msg string, entityID string, args ...any) {
 	// Log to console using slog
 	if entityID != "" {
-		args = append([]any{"entity_id", entityID}, args...)
+		args = append([]any{entityIDLogKey, entityID}, args...)
 	}
+
 	slog.Debug(msg, args...)
 
 	// Log to database
 	s.logToDatabase(slog.LevelDebug, msg, entityID, args...)
 }
 
-// Warn logs a warning message to both console and database
+// Warn logs a warning message to both console and database.
 func (s *Service) Warn(msg string, entityID string, args ...any) {
 	// Log to console using slog
 	if entityID != "" {
-		args = append([]any{"entity_id", entityID}, args...)
+		args = append([]any{entityIDLogKey, entityID}, args...)
 	}
+
 	slog.Warn(msg, args...)
 
 	// Log to database
@@ -209,8 +236,9 @@ func colorDiff(diff string) string {
 func (s *Service) InfoDiff(msg string, entityID string, diff string, args ...any) {
 	consoleArgs := args
 	if entityID != "" {
-		consoleArgs = append([]any{"entity_id", entityID}, consoleArgs...)
+		consoleArgs = append([]any{entityIDLogKey, entityID}, consoleArgs...)
 	}
+
 	slog.Info(msg, consoleArgs...)
 
 	if diff != "" {
@@ -222,32 +250,38 @@ func (s *Service) InfoDiff(msg string, entityID string, diff string, args ...any
 	if formattedArgs := formatArgs(args...); formattedArgs != "" {
 		logText = fmt.Sprintf("%s %s", msg, formattedArgs)
 	}
+
 	if diff != "" {
 		logText = logText + "\n" + diff
 	}
+
 	s.writeLogText(slog.LevelInfo, entityID, logText)
 }
 
 // prettifyJSON returns a colored version for console and a plain indented version
 // for storage. If jsonData is not valid JSON both versions are the original string.
 func prettifyJSON(jsonData string) (colored, plain string) {
-	var v interface{}
-	if err := json.Unmarshal([]byte(jsonData), &v); err != nil {
+	var parsed any
+
+	err := json.Unmarshal([]byte(jsonData), &parsed)
+	if err != nil {
 		return jsonData, jsonData
 	}
 
 	colorFormatter := prettyjson.NewFormatter()
+
 	colorFormatter.Indent = 2
-	if b, err := colorFormatter.Marshal(v); err == nil {
-		colored = string(b)
-	} else {
-		colored = jsonData
+
+	colored, plain = jsonData, jsonData
+
+	coloredBytes, err := colorFormatter.Marshal(parsed)
+	if err == nil {
+		colored = string(coloredBytes)
 	}
 
-	if b, err := json.MarshalIndent(v, "", "  "); err == nil {
-		plain = string(b)
-	} else {
-		plain = jsonData
+	plainBytes, err := json.MarshalIndent(parsed, "", "  ")
+	if err == nil {
+		plain = string(plainBytes)
 	}
 
 	return colored, plain
@@ -258,8 +292,9 @@ func prettifyJSON(jsonData string) (colored, plain string) {
 func (s *Service) DebugJSON(msg string, entityID string, jsonData string, args ...any) {
 	consoleArgs := args
 	if entityID != "" {
-		consoleArgs = append([]any{"entity_id", entityID}, consoleArgs...)
+		consoleArgs = append([]any{entityIDLogKey, entityID}, consoleArgs...)
 	}
+
 	slog.Debug(msg, consoleArgs...)
 
 	colored, plain := prettifyJSON(jsonData)
@@ -271,11 +306,12 @@ func (s *Service) DebugJSON(msg string, entityID string, jsonData string, args .
 	if formattedArgs := formatArgs(args...); formattedArgs != "" {
 		logText = fmt.Sprintf("%s %s", msg, formattedArgs)
 	}
+
 	logText = logText + "\n" + plain
 	s.writeLogText(slog.LevelDebug, entityID, logText)
 }
 
-// InfoContext logs with entity ID and automation name extracted from context
+// InfoContext logs with entity ID and automation name extracted from context.
 func (s *Service) InfoContext(ctx context.Context, msg string, args ...any) {
 	entityID := getEntityIDFromContext(ctx)
 	automationName := getAutomationNameFromContext(ctx)
@@ -283,81 +319,109 @@ func (s *Service) InfoContext(ctx context.Context, msg string, args ...any) {
 	// Add automation name to args if present and not already included
 	if automationName != "" {
 		hasAutomation := false
+
 		for i := 0; i < len(args); i += 2 {
-			if i < len(args) && args[i] == "automation" {
+			if i < len(args) && args[i] == automationLogKey {
 				hasAutomation = true
+
 				break
 			}
 		}
+
 		if !hasAutomation {
-			args = append([]any{"automation", automationName}, args...)
+			args = append([]any{automationLogKey, automationName}, args...)
 		}
 	}
 
 	s.Info(msg, entityID, args...)
 }
 
-// ErrorContext logs errors with context
+// ErrorContext logs errors with context.
 func (s *Service) ErrorContext(ctx context.Context, msg string, args ...any) {
 	entityID := getEntityIDFromContext(ctx)
 	automationName := getAutomationNameFromContext(ctx)
 
 	if automationName != "" {
 		hasAutomation := false
+
 		for i := 0; i < len(args); i += 2 {
-			if i < len(args) && args[i] == "automation" {
+			if i < len(args) && args[i] == automationLogKey {
 				hasAutomation = true
+
 				break
 			}
 		}
+
 		if !hasAutomation {
-			args = append([]any{"automation", automationName}, args...)
+			args = append([]any{automationLogKey, automationName}, args...)
 		}
 	}
 
 	s.Error(msg, entityID, args...)
 }
 
-// DebugContext logs debug messages with context
+// DebugContext logs debug messages with context.
 func (s *Service) DebugContext(ctx context.Context, msg string, args ...any) {
 	entityID := getEntityIDFromContext(ctx)
 	automationName := getAutomationNameFromContext(ctx)
 
 	if automationName != "" {
 		hasAutomation := false
+
 		for i := 0; i < len(args); i += 2 {
-			if i < len(args) && args[i] == "automation" {
+			if i < len(args) && args[i] == automationLogKey {
 				hasAutomation = true
+
 				break
 			}
 		}
+
 		if !hasAutomation {
-			args = append([]any{"automation", automationName}, args...)
+			args = append([]any{automationLogKey, automationName}, args...)
 		}
 	}
 
 	s.Debug(msg, entityID, args...)
 }
 
-// WarnContext logs warnings with context
+// WarnContext logs warnings with context.
 func (s *Service) WarnContext(ctx context.Context, msg string, args ...any) {
 	entityID := getEntityIDFromContext(ctx)
 	automationName := getAutomationNameFromContext(ctx)
 
 	if automationName != "" {
 		hasAutomation := false
+
 		for i := 0; i < len(args); i += 2 {
-			if i < len(args) && args[i] == "automation" {
+			if i < len(args) && args[i] == automationLogKey {
 				hasAutomation = true
+
 				break
 			}
 		}
+
 		if !hasAutomation {
-			args = append([]any{"automation", automationName}, args...)
+			args = append([]any{automationLogKey, automationName}, args...)
 		}
 	}
 
 	s.Warn(msg, entityID, args...)
+}
+
+// LastError returns the last database error that occurred.
+func (s *Service) LastError() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.lastError
+}
+
+// ErrorCount returns the total number of database errors that have occurred.
+func (s *Service) ErrorCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.errorCount
 }
 
 // contextKey is the type for context keys used to attach automation metadata.
@@ -375,29 +439,32 @@ const (
 	AutomationNameKey contextKey = "automation_name"
 )
 
-// getEntityIDFromContext extracts the entity ID from context
+// getEntityIDFromContext extracts the entity ID from context.
 func getEntityIDFromContext(ctx context.Context) string {
 	if entityID, ok := ctx.Value(EntityIDKey).(string); ok {
 		return entityID
 	}
+
 	return ""
 }
 
-// getAutomationNameFromContext extracts the automation name from context
+// getAutomationNameFromContext extracts the automation name from context.
 func getAutomationNameFromContext(ctx context.Context) string {
 	if name, ok := ctx.Value(AutomationNameKey).(string); ok {
 		return name
 	}
+
 	return ""
 }
 
-// formatArgs formats args into a key=value string similar to slog output
+// formatArgs formats args into a key=value string similar to slog output.
 func formatArgs(args ...any) string {
 	if len(args) == 0 {
 		return ""
 	}
 
 	var parts []string
+
 	for i := 0; i < len(args); i += 2 {
 		if i+1 < len(args) {
 			key := fmt.Sprintf("%v", args[i])
@@ -406,13 +473,15 @@ func formatArgs(args ...any) string {
 			if strings.Contains(value, " ") {
 				value = fmt.Sprintf("%q", value)
 			}
+
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
+
 	return strings.Join(parts, " ")
 }
 
-// logToDatabase writes the log entry to the database or buffers it
+// logToDatabase writes the log entry to the database or buffers it.
 func (s *Service) logToDatabase(level slog.Level, msg string, entityID string, args ...any) {
 	s.mu.RLock()
 	db := s.db
@@ -436,6 +505,7 @@ func (s *Service) logToDatabase(level slog.Level, msg string, entityID string, a
 	if db != nil {
 		// Database available, write asynchronously
 		timestamp := time.Now()
+
 		db.EnqueueWrite(func(gdb *gorm.DB) error {
 			log := store.Log{
 				Timestamp: timestamp,
@@ -443,6 +513,7 @@ func (s *Service) logToDatabase(level slog.Level, msg string, entityID string, a
 				EntityID:  entityID,
 				LogText:   logText,
 			}
+
 			return gdb.Create(&log).Error
 		})
 	} else {
@@ -480,6 +551,7 @@ func (s *Service) writeLogText(level slog.Level, entityID string, logText string
 
 	if db != nil {
 		timestamp := time.Now()
+
 		db.EnqueueWrite(func(gdb *gorm.DB) error {
 			log := store.Log{
 				Timestamp: timestamp,
@@ -487,6 +559,7 @@ func (s *Service) writeLogText(level slog.Level, entityID string, logText string
 				EntityID:  entityID,
 				LogText:   logText,
 			}
+
 			return gdb.Create(&log).Error
 		})
 	} else {
@@ -497,7 +570,9 @@ func (s *Service) writeLogText(level slog.Level, entityID string, logText string
 			EntityID:  entityID,
 			LogText:   logText,
 		}
+
 		s.bufferHead = (s.bufferHead + 1) % s.bufferSize
+
 		if s.bufferCount < s.bufferSize {
 			s.bufferCount++
 		}
@@ -525,10 +600,13 @@ func (s *Service) pruneLogs(stopChan <-chan struct{}) {
 				// a large DELETE inside a writer batch would hold the write lock
 				// (and stall every other queued write) until it finished.
 				cutoffTime := time.Now().Add(-s.retentionTime)
+
 				count, err := store.DeleteInChunks(db.DB, &store.Log{}, "timestamp < ?", cutoffTime)
+
 				if count > 0 {
 					slog.Info("Pruned old logs", "count", count, "cutoff", cutoffTime)
 				}
+
 				if err != nil {
 					slog.Error("Failed to prune old logs", "error", err)
 				}
@@ -537,7 +615,9 @@ func (s *Service) pruneLogs(stopChan <-chan struct{}) {
 	}
 }
 
-// Global default logger instance
+// Global default logger instance.
+//
+//nolint:gochecknoglobals // process-wide default logger, like slog.Default
 var defaultLogger = NewService()
 
 func GetDefaultLogger() *Service {
@@ -546,98 +626,84 @@ func GetDefaultLogger() *Service {
 
 // Global logging functions that use the default logger
 
-// Info logs an info message using the global default logger
+// Info logs an info message using the global default logger.
 func Info(msg string, entityID string, args ...any) {
 	defaultLogger.Info(msg, entityID, args...)
 }
 
-// Error logs an error message using the global default logger
+// Error logs an error message using the global default logger.
 func Error(msg string, entityID string, args ...any) {
 	defaultLogger.Error(msg, entityID, args...)
 }
 
-// Debug logs a debug message using the global default logger
+// Debug logs a debug message using the global default logger.
 func Debug(msg string, entityID string, args ...any) {
 	defaultLogger.Debug(msg, entityID, args...)
 }
 
-// InfoDiff logs an info message with a diff using the global default logger
+// InfoDiff logs an info message with a diff using the global default logger.
 func InfoDiff(msg string, entityID string, diff string, args ...any) {
 	defaultLogger.InfoDiff(msg, entityID, diff, args...)
 }
 
-// DebugJSON logs a debug message with a JSON payload using the global default logger
+// DebugJSON logs a debug message with a JSON payload using the global default logger.
 func DebugJSON(msg string, entityID string, jsonData string, args ...any) {
 	defaultLogger.DebugJSON(msg, entityID, jsonData, args...)
 }
 
-// Warn logs a warning message using the global default logger
+// Warn logs a warning message using the global default logger.
 func Warn(msg string, entityID string, args ...any) {
 	defaultLogger.Warn(msg, entityID, args...)
 }
 
-// InfoContext logs using the global default logger with context
+// InfoContext logs using the global default logger with context.
 func InfoContext(ctx context.Context, msg string, args ...any) {
 	defaultLogger.InfoContext(ctx, msg, args...)
 }
 
-// ErrorContext logs using the global default logger with context
+// ErrorContext logs using the global default logger with context.
 func ErrorContext(ctx context.Context, msg string, args ...any) {
 	defaultLogger.ErrorContext(ctx, msg, args...)
 }
 
-// DebugContext logs using the global default logger with context
+// DebugContext logs using the global default logger with context.
 func DebugContext(ctx context.Context, msg string, args ...any) {
 	defaultLogger.DebugContext(ctx, msg, args...)
 }
 
-// WarnContext logs using the global default logger with context
+// WarnContext logs using the global default logger with context.
 func WarnContext(ctx context.Context, msg string, args ...any) {
 	defaultLogger.WarnContext(ctx, msg, args...)
 }
 
-// SetDefaultDatabase sets the database for the global default logger
+// SetDefaultDatabase sets the database for the global default logger.
 func SetDefaultDatabase(db *store.Store) {
 	defaultLogger.SetDatabase(db)
 }
 
-// SetDefaultLevel sets the minimum log level for the global default logger
+// SetDefaultLevel sets the minimum log level for the global default logger.
 func SetDefaultLevel(level slog.Level) {
 	defaultLogger.SetLevel(level)
 }
 
-// StartDefault starts the global default logger
+// StartDefault starts the global default logger.
 func StartDefault() {
 	defaultLogger.Start()
 }
 
-// StopDefault stops the global default logger
+// StopDefault stops the global default logger.
 func StopDefault() {
 	defaultLogger.Stop()
 }
 
-// LastError returns the last database error that occurred
-func (s *Service) LastError() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.lastError
-}
-
-// ErrorCount returns the total number of database errors that have occurred
-func (s *Service) ErrorCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.errorCount
-}
-
 // Global error tracking functions
 
-// LastError returns the last database error from the global default logger
+// LastError returns the last database error from the global default logger.
 func LastError() error {
 	return defaultLogger.LastError()
 }
 
-// ErrorCount returns the total number of database errors from the global default logger
+// ErrorCount returns the total number of database errors from the global default logger.
 func ErrorCount() int {
 	return defaultLogger.ErrorCount()
 }

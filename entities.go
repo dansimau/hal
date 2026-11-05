@@ -7,6 +7,21 @@ import (
 	"github.com/dansimau/hal/homeassistant"
 )
 
+// Home Assistant state values and service call fields shared by the entity
+// types in this package.
+const (
+	stateOn  = "on"
+	stateOff = "off"
+
+	serviceTurnOn  = "turn_on"
+	serviceTurnOff = "turn_off"
+
+	serviceDataEntityID = "entity_id"
+
+	domainLight        = "light"
+	domainInputBoolean = "input_boolean"
+)
+
 // EntityInterface is the interface that we accept which allows us to create
 // custom components that embed an Entity.
 type EntityInterface interface {
@@ -65,7 +80,7 @@ func findEntities(v any) []EntityInterface {
 	var entities []EntityInterface
 
 	value := reflect.ValueOf(v)
-	if value.Kind() == reflect.Ptr {
+	if value.Kind() == reflect.Pointer {
 		value = value.Elem()
 	}
 
@@ -85,7 +100,7 @@ func findEntities(v any) []EntityInterface {
 		}
 
 		// Check if field implements EntityLike interface
-		if field.Kind() == reflect.Ptr && !field.IsNil() {
+		if field.Kind() == reflect.Pointer && !field.IsNil() {
 			if entity, ok := field.Interface().(EntityInterface); ok {
 				entities = append(entities, entity)
 
@@ -99,7 +114,7 @@ func findEntities(v any) []EntityInterface {
 			if field.CanInterface() {
 				entities = append(entities, findEntities(field.Interface())...)
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if !field.IsNil() && field.CanInterface() {
 				entities = append(entities, findEntities(field.Interface())...)
 			}

@@ -15,16 +15,16 @@ import (
 func TestSyncStatesAppliesInitialState(t *testing.T) {
 	t.Parallel()
 
-	server, err := hassws.NewServer(map[string]string{"test-token": testUserID})
+	server, err := hassws.NewServer(map[string]string{testToken: testUserID})
 	assert.NilError(t, err)
 
 	conn := NewConnection(Config{
 		HomeAssistant: HomeAssistantConfig{
 			Host:   server.ListenAddress(),
-			Token:  "test-token",
+			Token:  testToken,
 			UserID: testUserID,
 		},
-		DatabasePath: ":memory:",
+		DatabasePath: memoryDatabasePath,
 	})
 
 	light := NewLight("light.kitchen")
@@ -45,7 +45,8 @@ func TestSyncStatesAppliesInitialState(t *testing.T) {
 	})
 
 	go func() {
-		if err := conn.Start(); err != nil {
+		err := conn.Start()
+		if err != nil {
 			t.Errorf("Start() failed: %v", err)
 		}
 	}()

@@ -21,6 +21,7 @@ func TestTimerNewAndIsRunning(t *testing.T) {
 	assert.Assert(t, !timer.IsRunning())
 
 	var fired atomic.Bool
+
 	timer.StartContext(context.Background(), func(context.Context) {
 		fired.Store(true)
 	}, time.Minute)
@@ -47,6 +48,7 @@ func TestTimerCancel(t *testing.T) {
 	assert.Assert(t, !timer.IsRunning())
 
 	var fired atomic.Bool
+
 	timer.StartContext(context.Background(), func(context.Context) {
 		fired.Store(true)
 	}, time.Minute)
@@ -67,6 +69,7 @@ func TestTimerResetPicksUpLatestCallback(t *testing.T) {
 	timer := hal.NewTimer(mock)
 
 	var first, second atomic.Bool
+
 	timer.StartContext(context.Background(), func(context.Context) {
 		first.Store(true)
 	}, time.Minute)

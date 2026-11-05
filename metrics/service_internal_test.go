@@ -25,6 +25,8 @@ func setupTestDB(t *testing.T) *store.Store {
 }
 
 func TestNewService(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	service := NewService(db)
 
@@ -32,6 +34,8 @@ func TestNewService(t *testing.T) {
 }
 
 func TestRecordCounter(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	service := NewService(db)
 
@@ -43,6 +47,7 @@ func TestRecordCounter(t *testing.T) {
 
 	// Verify metric was recorded
 	var metrics []store.Metric
+
 	result := db.Find(&metrics)
 	assert.NilError(t, result.Error)
 	assert.Equal(t, len(metrics), 1)
@@ -56,6 +61,8 @@ func TestRecordCounter(t *testing.T) {
 }
 
 func TestRecordTimer(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	service := NewService(db)
 
@@ -69,6 +76,7 @@ func TestRecordTimer(t *testing.T) {
 
 	// Verify metric was recorded
 	var metrics []store.Metric
+
 	result := db.Find(&metrics)
 	assert.NilError(t, result.Error)
 	assert.Equal(t, len(metrics), 1)
@@ -81,6 +89,8 @@ func TestRecordTimer(t *testing.T) {
 }
 
 func TestMultipleMetrics(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	service := NewService(db)
 
@@ -94,10 +104,12 @@ func TestMultipleMetrics(t *testing.T) {
 
 	// Verify all metrics were recorded
 	var count int64
+
 	db.Model(&store.Metric{}).Count(&count)
 	assert.Equal(t, count, int64(3))
 }
 
+//nolint:paralleltest // the code under test logs through the global default logger
 func TestPruneOldData(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -130,6 +142,7 @@ func TestPruneOldData(t *testing.T) {
 	assert.NilError(t, pruneOldData(db.DB, now))
 
 	var rawCount, rollupCount int64
+
 	db.Model(&store.Metric{}).Count(&rawCount)
 	db.Model(&store.MetricRollup{}).Count(&rollupCount)
 
@@ -139,6 +152,7 @@ func TestPruneOldData(t *testing.T) {
 	assert.Equal(t, rollupCount, int64(1))
 }
 
+//nolint:paralleltest // the code under test logs through the global default logger
 func TestPruneOldDataDefersRawUntilRolledUp(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -154,6 +168,7 @@ func TestPruneOldDataDefersRawUntilRolledUp(t *testing.T) {
 	assert.NilError(t, pruneOldData(db.DB, now))
 
 	var rawCount int64
+
 	db.Model(&store.Metric{}).Count(&rawCount)
 	assert.Equal(t, rawCount, int64(1))
 
@@ -171,6 +186,8 @@ func TestPruneOldDataDefersRawUntilRolledUp(t *testing.T) {
 }
 
 func TestAggregate(t *testing.T) {
+	t.Parallel()
+
 	base := time.Date(2026, 7, 11, 12, 30, 0, 0, time.UTC)
 
 	var raw []store.Metric
@@ -199,6 +216,8 @@ func TestAggregate(t *testing.T) {
 }
 
 func TestRollupPendingBackfillsHistory(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	service := NewService(db)
 
@@ -217,6 +236,7 @@ func TestRollupPendingBackfillsHistory(t *testing.T) {
 	assert.NilError(t, service.rollupPending(base.Add(10*time.Minute)))
 
 	var rollups []store.MetricRollup
+
 	assert.NilError(t, db.Order("bucket_start ASC").Find(&rollups).Error)
 	assert.Equal(t, len(rollups), 2)
 	assert.Equal(t, rollups[0].BucketStart, base.Unix())
@@ -226,21 +246,28 @@ func TestRollupPendingBackfillsHistory(t *testing.T) {
 
 	// Re-running is idempotent: contiguous re-rollup yields the same rollups.
 	assert.NilError(t, service.rollupPending(base.Add(10*time.Minute)))
+
 	var count int64
+
 	db.Model(&store.MetricRollup{}).Count(&count)
 	assert.Equal(t, count, int64(2))
 
 	// Histograms must survive the round-trip through the JSON serializer.
 	var r store.MetricRollup
+
 	assert.NilError(t, db.Where("bucket_start = ?", base.Unix()).First(&r).Error)
+
 	var histTotal int64
 	for _, c := range r.Histogram {
 		histTotal += c
 	}
+
 	assert.Equal(t, histTotal, int64(2))
 }
 
 func TestRollupPendingResumesFromWatermarkWithoutGaps(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	service := NewService(db)
 
@@ -268,10 +295,12 @@ func TestRollupPendingResumesFromWatermarkWithoutGaps(t *testing.T) {
 	assert.NilError(t, service.rollupPending(base.Add(3*time.Minute)))
 
 	var buckets []int64
+
 	assert.NilError(t, db.Model(&store.MetricRollup{}).Order("bucket_start ASC").Pluck("bucket_start", &buckets).Error)
 	assert.DeepEqual(t, buckets, []int64{base.Unix(), base.Add(2 * time.Minute).Unix()})
 }
 
+//nolint:paralleltest // the code under test logs through the global default logger
 func TestServiceStartStop(t *testing.T) {
 	db := setupTestDB(t)
 	service := NewService(db)

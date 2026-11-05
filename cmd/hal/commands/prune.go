@@ -1,14 +1,23 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/dansimau/hal/store"
 	"github.com/spf13/cobra"
 )
 
-// NewPruneCmd creates the prune command
+var (
+	// errPruneFlagRequired is returned when neither --last nor --before is given.
+	errPruneFlagRequired = errors.New("either --last or --before flag is required")
+	// errPruneBothFlags is returned when both --last and --before are given.
+	errPruneBothFlags = errors.New("cannot use both --last and --before flags")
+)
+
+// NewPruneCmd creates the prune command.
 func NewPruneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prune",
@@ -22,29 +31,32 @@ func NewPruneCmd() *cobra.Command {
 	return cmd
 }
 
-// NewPruneLogsCmd creates the prune logs command
+// NewPruneLogsCmd creates the prune logs command.
 func NewPruneLogsCmd() *cobra.Command {
-	var lastDuration string
-	var beforeTime string
+	var (
+		lastDuration string
+		beforeTime   string
+	)
 
 	cmd := &cobra.Command{
-		Use:   "logs",
+		Use:   logsCmdUse,
 		Short: "Delete old log entries",
 		Long: `Delete old log entries from the HAL automation system.
 Requires either --last or --before flag to specify which logs to delete.`,
 		Example: `  hal prune logs --last 1d                    # Delete logs older than 1 day
   hal prune logs --last 7d                    # Delete logs older than 7 days
   hal prune logs --before "2024-01-01"        # Delete logs before specific date`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Require at least one of --last or --before
 			if lastDuration == "" && beforeTime == "" {
-				return fmt.Errorf("either --last or --before flag is required")
+				return errPruneFlagRequired
 			}
 			// Don't allow both flags
 			if lastDuration != "" && beforeTime != "" {
-				return fmt.Errorf("cannot use both --last and --before flags")
+				return errPruneBothFlags
 			}
-			return runPruneLogsCommand(lastDuration, beforeTime)
+
+			return runPruneLogsCommand(cmd.OutOrStdout(), lastDuration, beforeTime)
 		},
 	}
 
@@ -54,7 +66,7 @@ Requires either --last or --before flag to specify which logs to delete.`,
 	return cmd
 }
 
-func runPruneLogsCommand(lastDuration, beforeTime string) error {
+func runPruneLogsCommand(out io.Writer, lastDuration, beforeTime string) error {
 	// Open database connection using default path
 	db, err := store.Open("sqlite.db")
 	if err != nil {
@@ -63,17 +75,20 @@ func runPruneLogsCommand(lastDuration, beforeTime string) error {
 
 	// Apply time filters
 	var cutoffTime time.Time
+
 	if lastDuration != "" {
 		duration, err := parseDuration(lastDuration)
 		if err != nil {
 			return fmt.Errorf("invalid duration format: %w", err)
 		}
+
 		cutoffTime = time.Now().Add(-duration)
 	} else if beforeTime != "" {
 		before, err := parseTime(beforeTime)
 		if err != nil {
 			return fmt.Errorf("invalid before time format: %w", err)
 		}
+
 		cutoffTime = before
 	}
 
@@ -85,7 +100,7 @@ func runPruneLogsCommand(lastDuration, beforeTime string) error {
 	}
 
 	// Print summary
-	fmt.Printf("Deleted %d log entries before %s\n",
+	fmt.Fprintf(out, "Deleted %d log entries before %s\n",
 		deleted,
 		cutoffTime.Format("2006-01-02 15:04:05"),
 	)
