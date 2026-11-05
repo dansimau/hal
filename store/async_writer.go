@@ -75,11 +75,12 @@ type AsyncWriter struct {
 
 	flushInterval atomic.Int64 // nanoseconds
 
-	// Pending entity states, coalesced so only the latest state per entity is
-	// written. These are never dropped; memory is bounded by the entity count.
-	entityMu      sync.Mutex
-	entityPending map[string]*Entity
-	entitySignal  chan struct{}
+	// Pending keyed writes (entity and timer states), coalesced so only the
+	// latest write per key is committed. These are never dropped; memory is
+	// bounded by the number of distinct keys (entities and timers).
+	keyedMu      sync.Mutex
+	keyedPending map[string]WriteOperation
+	keyedSignal  chan struct{}
 
 	dropped        atomic.Int64 // total writes dropped
 	droppedPending atomic.Int64 // writes dropped since the last warning
@@ -90,12 +91,12 @@ type AsyncWriter struct {
 func NewAsyncWriter(db *gorm.DB) *AsyncWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 	aw := &AsyncWriter{
-		db:            db,
-		queue:         make(chan queuedOp, queueSize),
-		ctx:           ctx,
-		cancel:        cancel,
-		entityPending: make(map[string]*Entity),
-		entitySignal:  make(chan struct{}, 1),
+		db:           db,
+		queue:        make(chan queuedOp, queueSize),
+		ctx:          ctx,
+		cancel:       cancel,
+		keyedPending: make(map[string]WriteOperation),
+		keyedSignal:  make(chan struct{}, 1),
 	}
 	aw.flushInterval.Store(int64(DefaultFlushInterval))
 
@@ -169,21 +170,14 @@ func (aw *AsyncWriter) Enqueue(op WriteOperation) {
 // asynchronously. Repeated updates for the same entity before the next write are
 // coalesced, and entity states are never dropped.
 func (aw *AsyncWriter) EnqueueEntityState(id string, state *homeassistant.State) {
-	entity := &Entity{ID: id, State: state}
+	aw.enqueueKeyed("entity:"+id, upsertEntity(&Entity{ID: id, State: state}))
+}
 
-	if aw.runSyncIfNotRunning(upsertEntity(entity)) {
-		return
-	}
-
-	aw.entityMu.Lock()
-	aw.entityPending[id] = entity
-	aw.entityMu.Unlock()
-
-	select {
-	case aw.entitySignal <- struct{}{}:
-	default:
-		// Writer already signalled
-	}
+// EnqueueTimerState records the latest state for a timer to be written
+// asynchronously. Repeated updates for the same timer before the next write are
+// coalesced, and timer states are never dropped.
+func (aw *AsyncWriter) EnqueueTimerState(timer *Timer) {
+	aw.enqueueKeyed("timer:"+timer.Name, upsertTimer(timer))
 }
 
 // Dropped returns the total number of write operations dropped because the
@@ -216,6 +210,25 @@ func (aw *AsyncWriter) WaitForWrites() {
 	}
 }
 
+// enqueueKeyed queues op to be committed with the next batch, replacing any
+// pending write with the same key. Only the latest write per key is committed,
+// so a value that changes many times within a flush interval costs one write.
+func (aw *AsyncWriter) enqueueKeyed(key string, op WriteOperation) {
+	if aw.runSyncIfNotRunning(op) {
+		return
+	}
+
+	aw.keyedMu.Lock()
+	aw.keyedPending[key] = op
+	aw.keyedMu.Unlock()
+
+	select {
+	case aw.keyedSignal <- struct{}{}:
+	default:
+		// Writer already signalled
+	}
+}
+
 // processWrites waits for a write to become pending, then collects a batch and
 // commits it in a single transaction.
 func (aw *AsyncWriter) processWrites() {
@@ -230,7 +243,7 @@ func (aw *AsyncWriter) processWrites() {
 			return
 		case op := <-aw.queue:
 			first = &op
-		case <-aw.entitySignal:
+		case <-aw.keyedSignal:
 		}
 
 		aw.commitBatch(aw.collectBatch(first))
@@ -279,9 +292,9 @@ func (aw *AsyncWriter) commitBatch(batch []queuedOp) {
 }
 
 // collectBatch gathers first (if non-nil) and operations arriving within the
-// flush interval, up to maxBatch, plus all pending entity states, into a single
+// flush interval, up to maxBatch, plus all pending keyed writes, into a single
 // batch. It returns early if an operation is being waited on (WaitForWrites) or
-// the writer is shutting down. Entity states keep coalescing while the batch
+// the writer is shutting down. Keyed writes keep coalescing while the batch
 // waits, since they are only taken from the pending map at the end.
 func (aw *AsyncWriter) collectBatch(first *queuedOp) []queuedOp {
 	batch := make([]queuedOp, 0, maxBatch)
@@ -300,8 +313,8 @@ func (aw *AsyncWriter) collectBatch(first *queuedOp) []queuedOp {
 		case op := <-aw.queue:
 			batch = append(batch, op)
 			flush = op.done != nil
-		case <-aw.entitySignal:
-			// Taken below, with every other pending entity state.
+		case <-aw.keyedSignal:
+			// Taken below, with every other pending keyed write.
 		case <-timer.C:
 			flush = true
 		case <-aw.ctx.Done():
@@ -320,13 +333,13 @@ collect:
 		}
 	}
 
-	aw.entityMu.Lock()
-	entities := aw.entityPending
-	aw.entityPending = make(map[string]*Entity)
-	aw.entityMu.Unlock()
+	aw.keyedMu.Lock()
+	keyed := aw.keyedPending
+	aw.keyedPending = make(map[string]WriteOperation)
+	aw.keyedMu.Unlock()
 
-	for _, entity := range entities {
-		batch = append(batch, queuedOp{op: upsertEntity(entity)})
+	for _, op := range keyed {
+		batch = append(batch, queuedOp{op: op})
 	}
 
 	return batch
@@ -452,5 +465,13 @@ func upsertEntity(entity *Entity) WriteOperation {
 		return db.Clauses(clause.OnConflict{
 			UpdateAll: true,
 		}).Create(entity).Error
+	}
+}
+
+func upsertTimer(timer *Timer) WriteOperation {
+	return func(db *gorm.DB) error {
+		return db.Clauses(clause.OnConflict{
+			UpdateAll: true,
+		}).Create(timer).Error
 	}
 }

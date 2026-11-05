@@ -28,6 +28,9 @@ HAL is a framework for programming home automation logic in Go on top of
   automations fire in a predictable order.
 - 💾 **State persistence & metrics.** Entity state and automation history are
   persisted to SQLite; timing/counter metrics are recorded automatically.
+- ⏱️ **Durable timers.** Automation timers (such as a countdown to turning
+  lights off) are saved to the database and restored after a restart, so a
+  restart does not interrupt them.
 - 🔄 **Resilient connection.** Automatic reconnection with heartbeats to Home
   Assistant over its WebSocket API.
 - 🛡️ **Loop protection.** State changes caused by HAL itself won't re-trigger
@@ -185,6 +188,50 @@ hal.NewAutomation().
 - **`PrintDebug`** — log state changes for a set of entities; handy while
   developing.
 
+### Durable timers
+
+The timers in `SensorsTriggerLights` and `Timer` survive a restart: their state
+is saved to the database whenever it changes and running timers are restored
+when HAL next connects to Home Assistant, firing at the original time (or
+immediately, if that time passed while HAL was down).
+
+Timers in your own automations are durable too. Declare each `hal.Timer`
+on the automation with `WithTimer`, which gives it a unique name and the
+callback to run when it expires:
+
+```go
+type Porch struct {
+	Light  *hal.Light
+	Sensor *hal.BinarySensor
+
+	lightsOffTimer hal.Timer
+}
+
+func (p *Porch) Automations() []hal.Automation {
+	return []hal.Automation{
+		hal.NewAutomation().
+			WithName("Porch light").
+			WithEntities(p.Sensor).
+			WithTimer(&p.lightsOffTimer, hal.Timer{
+				Name: "PorchLightsOff",
+				OnExpire: func(ctx context.Context) {
+					p.Light.TurnOffContext(ctx)
+				},
+			}).
+			WithAction(func(ctx context.Context, _ hal.EntityInterface) {
+				if p.Sensor.IsOn() {
+					p.lightsOffTimer.Cancel()
+				} else {
+					p.lightsOffTimer.Start(ctx, 10*time.Minute)
+				}
+			}),
+	}
+}
+```
+
+A custom automation type can instead implement `hal.TimerProvider` directly.
+Inspect saved timers with `hal timers`.
+
 ## Companion CLI
 
 HAL ships with a CLI for inspecting a running deployment. Install it with:
@@ -201,6 +248,7 @@ It reads the same `hal.yaml`/SQLite database and provides:
 | `hal events`    | Stream live state-change events                |
 | `hal logs`      | Tail automation logs                           |
 | `hal stats`     | Show recorded metrics                          |
+| `hal timers`    | Show saved automation timers                   |
 | `hal prune`     | Prune old history from the database            |
 
 ## Development

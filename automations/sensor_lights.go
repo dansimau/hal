@@ -64,11 +64,17 @@ type SensorsTriggerLights struct {
 }
 
 func NewSensorsTriggerLights() *SensorsTriggerLights {
-	return &SensorsTriggerLights{
+	a := &SensorsTriggerLights{
 		dimLightsBeforeTurnOff: defaultDimLightsBeforeTurnOff,
 		turnOffCooldownPeriod:  defaultTurnOffCooldownPeriod,
 		brightness:             maxBrightness,
 	}
+
+	a.dimLightsTimer.OnExpire = a.dimLights
+	a.turnOffTimer.OnExpire = a.turnOffLights
+	a.turnOffCooldownTimer.OnExpire = a.turnOffCooldownElapsed
+
+	return a
 }
 
 // WithBrightness sets the brightness of the lights when they are turned on.
@@ -80,10 +86,10 @@ func (a *SensorsTriggerLights) WithBrightness(brightness float64) *SensorsTrigge
 
 // WithClock can be used to pass in a mock clock for testing.
 func (a *SensorsTriggerLights) WithClock(c clock.Clock) *SensorsTriggerLights {
-	a.dimLightsTimer = *hal.NewTimer(c)
-	a.humanOverrideTimer = *hal.NewTimer(c)
-	a.turnOffTimer = *hal.NewTimer(c)
-	a.turnOffCooldownTimer = *hal.NewTimer(c)
+	a.dimLightsTimer.Clock = c
+	a.humanOverrideTimer.Clock = c
+	a.turnOffTimer.Clock = c
+	a.turnOffCooldownTimer.Clock = c
 
 	return a
 }
@@ -214,6 +220,20 @@ func (a *SensorsTriggerLights) Name() string {
 	return a.name
 }
 
+// Timers returns the automation's timers so that the connection saves them
+// and restores them after a restart (see hal.TimerProvider). In particular, a
+// turn off countdown that was running when hal stopped still turns the lights
+// off, rather than leaving them on indefinitely. The timers are named after
+// the automation, so it must be named before it is registered.
+func (a *SensorsTriggerLights) Timers() []*hal.Timer {
+	a.turnOffTimer.Name = a.name + "/turn_off"
+	a.dimLightsTimer.Name = a.name + "/dim_lights"
+	a.humanOverrideTimer.Name = a.name + "/human_override"
+	a.turnOffCooldownTimer.Name = a.name + "/turn_off_cooldown"
+
+	return []*hal.Timer{&a.turnOffTimer, &a.dimLightsTimer, &a.humanOverrideTimer, &a.turnOffCooldownTimer}
+}
+
 // triggered returns true if any of the sensors have been triggered.
 func (a *SensorsTriggerLights) triggered() bool {
 	for _, sensor := range a.sensors {
@@ -250,9 +270,7 @@ func (a *SensorsTriggerLights) startDimLightsTimer(ctx context.Context) {
 	}
 
 	logger.InfoContext(ctx, "Starting dim lights timer", "duration", dimLightsAfter.String())
-	a.dimLightsTimer.StartContext(ctx, func(ctx context.Context) {
-		a.dimLights(ctx)
-	}, dimLightsAfter)
+	a.dimLightsTimer.Start(ctx, dimLightsAfter)
 }
 
 func (a *SensorsTriggerLights) startTurnOffTimer(ctx context.Context) {
@@ -261,9 +279,7 @@ func (a *SensorsTriggerLights) startTurnOffTimer(ctx context.Context) {
 	}
 
 	logger.InfoContext(ctx, "Starting turn off timer", "duration", a.turnsOffAfter.String())
-	a.turnOffTimer.StartContext(ctx, func(ctx context.Context) {
-		a.turnOffLights(ctx)
-	}, *a.turnsOffAfter)
+	a.turnOffTimer.Start(ctx, *a.turnsOffAfter)
 
 	a.startDimLightsTimer(ctx)
 }
@@ -432,18 +448,20 @@ func (a *SensorsTriggerLights) handleLightStateChanged(ctx context.Context) {
 
 		if a.humanOverrideFor != nil {
 			logger.InfoContext(ctx, "Light turned on, setting human override", "duration", a.humanOverrideFor.String())
-			a.humanOverrideTimer.StartContext(ctx, nil, *a.humanOverrideFor)
+			a.humanOverrideTimer.Start(ctx, *a.humanOverrideFor)
 		}
 	} else {
 		a.humanOverrideTimer.Cancel()
 
 		if a.turnOffCooldownPeriod > 0 {
 			logger.InfoContext(ctx, "Light turned off, starting turn off cooldown", "duration", a.turnOffCooldownPeriod.String())
-			a.turnOffCooldownTimer.StartContext(ctx, func(ctx context.Context) {
-				logger.InfoContext(ctx, "Turn off cooldown elapsed")
-			}, a.turnOffCooldownPeriod)
+			a.turnOffCooldownTimer.Start(ctx, a.turnOffCooldownPeriod)
 		}
 	}
+}
+
+func (a *SensorsTriggerLights) turnOffCooldownElapsed(ctx context.Context) {
+	logger.InfoContext(ctx, "Turn off cooldown elapsed")
 }
 
 // isLightDimmedFromTimer returns true if the lights are dimmed from the timer.

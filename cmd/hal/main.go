@@ -28,6 +28,7 @@ and provides powerful automation capabilities with built-in metrics and monitori
 	rootCmd.AddCommand(commands.NewEntitiesCmd())
 	rootCmd.AddCommand(commands.NewPruneCmd())
 	rootCmd.AddCommand(commands.NewEventsCmd())
+	rootCmd.AddCommand(commands.NewTimersCmd())
 
 	return rootCmd
 }

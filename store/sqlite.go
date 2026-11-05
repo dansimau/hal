@@ -87,7 +87,7 @@ func Open(path string) (*Store, error) {
 		sqlDB.SetMaxOpenConns(1)
 	}
 
-	err = db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{})
+	err = db.AutoMigrate(&Entity{}, &Metric{}, &MetricRollup{}, &Log{}, &Timer{})
 	if err != nil {
 		return nil, fail(err)
 	}
@@ -131,6 +131,25 @@ func (s *Store) EnqueueWrite(op WriteOperation) {
 // EnqueueEntityState asynchronously persists the latest state of an entity.
 func (s *Store) EnqueueEntityState(id string, state *homeassistant.State) {
 	s.asyncWriter.EnqueueEntityState(id, state)
+}
+
+// EnqueueTimerState asynchronously persists the state of a durable timer.
+// Repeated updates for the same timer before the next write are coalesced,
+// and timer states are never dropped.
+func (s *Store) EnqueueTimerState(timer *Timer) {
+	s.asyncWriter.EnqueueTimerState(timer)
+}
+
+// Timers returns the saved state of every durable timer, ordered by name.
+func (s *Store) Timers() ([]Timer, error) {
+	var timers []Timer
+
+	err := s.Order("name").Find(&timers).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return timers, nil
 }
 
 // SetFlushInterval sets how long queued writes are held before being committed

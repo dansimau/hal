@@ -27,6 +27,12 @@ type Connection struct {
 	automations map[string][]Automation
 	entities    map[string]EntityInterface
 
+	// timers are the durable timers registered by automations, keyed by the
+	// name they are saved under. timersRestored records whether they have been
+	// restored from the database yet; it is guarded by mutex.
+	timers         map[string]registeredTimer
+	timersRestored bool
+
 	// Lock to serialize state updates and ensure automations fire in order.
 	mutex sync.RWMutex
 
@@ -117,6 +123,7 @@ func NewConnection(cfg Config) *Connection {
 
 		automations: make(map[string][]Automation),
 		entities:    make(map[string]EntityInterface),
+		timers:      make(map[string]registeredTimer),
 
 		SunTimes: NewSunTimes(cfg.Location),
 
@@ -144,7 +151,9 @@ func (h *Connection) FindEntities(v any) {
 	h.RegisterEntities(findEntities(v)...)
 }
 
-// RegisterAutomations registers automations and binds them to the relevant entities.
+// RegisterAutomations registers automations and binds them to the relevant
+// entities. The timers of automations that implement TimerProvider are saved
+// to the database and restored on the next start.
 func (h *Connection) RegisterAutomations(automations ...Automation) {
 	for _, automation := range automations {
 		logger.Info("Registering automation", "", "Name", automation.Name())
@@ -152,6 +161,8 @@ func (h *Connection) RegisterAutomations(automations ...Automation) {
 		for _, entity := range automation.Entities() {
 			h.automations[entity.GetID()] = append(h.automations[entity.GetID()], automation)
 		}
+
+		h.registerTimers(automation)
 	}
 }
 
@@ -246,7 +257,10 @@ func (h *Connection) Close() {
 		h.metricsService.Stop()
 		logger.StopDefault()
 
-		// Flush pending database writes before closing
+		// Save the state of every timer so running ones resume on the next
+		// start, then flush pending database writes before closing.
+		h.syncTimers()
+
 		err := h.db.Close()
 		if err != nil {
 			logger.Error("Failed to close database", "", "error", err)
@@ -323,12 +337,22 @@ func (h *Connection) StateChangeEvent(event hassws.EventMessage) {
 	}
 }
 
-// connect establishes the WebSocket connection, subscribes to events, and syncs states.
+// connect establishes the WebSocket connection, subscribes to events, syncs
+// states and, on the first connection, restores saved timers.
 func (h *Connection) connect() error {
 	err := h.homeAssistant.Connect()
 	if err != nil {
 		return err
 	}
+
+	// Hold the state lock from subscribing until timers are restored, so no
+	// event reaches an automation before its timers are back in place: an
+	// event could otherwise cancel a timer that is not running yet, only for
+	// the restore to start it afterwards. Events arriving meanwhile are
+	// buffered by the client and dispatched, in order, once the lock is
+	// released.
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
 
 	err = h.homeAssistant.SubscribeEvents(string(hassws.MessageTypeStateChanged), h.StateChangeEvent)
 	if err != nil {
@@ -339,6 +363,8 @@ func (h *Connection) connect() error {
 	if err != nil {
 		return fmt.Errorf("failed to sync initial states: %w", err)
 	}
+
+	h.restoreTimers()
 
 	return nil
 }

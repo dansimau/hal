@@ -19,6 +19,7 @@ type AutomationConfig struct {
 	action   func(ctx context.Context, trigger EntityInterface)
 	entities Entities
 	name     string
+	timers   []*Timer
 }
 
 func NewAutomation() *AutomationConfig {
@@ -57,4 +58,39 @@ func (c *AutomationConfig) WithName(name string) *AutomationConfig {
 	c.name = name
 
 	return c
+}
+
+// WithTimer initialises timer with the Name, OnExpire and Clock of config and
+// declares it as one of the automation's timers, so that it is saved to the
+// database and restored after a restart. The timer is typically a field of the
+// struct the automation belongs to:
+//
+//	type Porch struct {
+//		Light *hal.Light
+//		// ...
+//		lightsOffTimer hal.Timer
+//	}
+//
+//	hal.NewAutomation().
+//		WithTimer(&porch.lightsOffTimer, hal.Timer{
+//			Name: "PorchLightsOff",
+//			OnExpire: func(ctx context.Context) {
+//				porch.Light.TurnOffContext(ctx)
+//			},
+//		}).
+//		WithAction(func(ctx context.Context, _ hal.EntityInterface) {
+//			porch.lightsOffTimer.Start(ctx, 10*time.Minute)
+//		})
+func (c *AutomationConfig) WithTimer(timer *Timer, config Timer) *AutomationConfig {
+	timer.Name = config.Name
+	timer.OnExpire = config.OnExpire
+	timer.Clock = config.Clock
+	c.timers = append(c.timers, timer)
+
+	return c
+}
+
+// Timers returns the automation's timers; see TimerProvider.
+func (c *AutomationConfig) Timers() []*Timer {
+	return c.timers
 }

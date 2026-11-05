@@ -18,6 +18,34 @@ type Entity struct {
 	State *homeassistant.State `gorm:"serializer:json"`
 }
 
+// TimerStatus is the last known state of a durable timer.
+type TimerStatus string
+
+// TimerStatus constants.
+const (
+	// TimerStatusRunning means the timer is counting down and will fire at
+	// ExpiresAt. A running timer is restored when hal restarts.
+	TimerStatusRunning TimerStatus = "running"
+	// TimerStatusExpired means the timer fired at ExpiresAt.
+	TimerStatusExpired TimerStatus = "expired"
+	// TimerStatusCancelled means the timer was cancelled before it fired.
+	TimerStatusCancelled TimerStatus = "cancelled"
+)
+
+// Timer is the saved state of a durable automation timer (see
+// hal.DurableTimer). It is written whenever the timer starts, fires or is
+// cancelled, so that timers still running at shutdown can be restored on the
+// next start.
+type Timer struct {
+	Model
+
+	// Name is the automation name and timer name joined with "/".
+	Name      string      `gorm:"primaryKey"`
+	Status    TimerStatus `gorm:"not null;size:20"`
+	StartedAt time.Time   `gorm:"not null"` // when the timer was last started
+	ExpiresAt time.Time   `gorm:"not null"` // when the timer fires, or fired or was cancelled
+}
+
 // MetricType represents the type of metric being recorded.
 type MetricType string
 
