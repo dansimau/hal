@@ -19,6 +19,12 @@ const (
 	queueSize = 10000
 	// maxBatch is the maximum number of operations committed in one transaction.
 	maxBatch = 500
+	// defaultFlushInterval is how long the writer waits after the first pending
+	// write before committing, so that writes arriving close together share one
+	// transaction. Every commit rewrites each dirty page in full to the WAL, so
+	// committing per write costs many times more disk writes than committing
+	// per interval (see Store.SetFlushInterval).
+	defaultFlushInterval = 10 * time.Second
 	// dropReportInterval rate-limits warnings about dropped writes.
 	dropReportInterval = 30 * time.Second
 	// busyRetryMin and busyRetryMax bound the backoff between attempts to commit
@@ -40,6 +46,10 @@ type queuedOp struct {
 // AsyncWriter manages asynchronous database write operations. Callers never
 // block on disk I/O: operations are queued and committed in batches by a single
 // goroutine, and are dropped if the queue is full (e.g. when the disk is slow).
+//
+// A batch is committed once the flush interval has passed since its first
+// write, or sooner if it reaches maxBatch, a caller is waiting on it
+// (WaitForWrites), or the writer is shutting down.
 type AsyncWriter struct {
 	db      *gorm.DB
 	queue   chan queuedOp
@@ -48,6 +58,8 @@ type AsyncWriter struct {
 	cancel  context.CancelFunc
 	started bool
 	mu      sync.Mutex
+
+	flushInterval atomic.Int64 // nanoseconds
 
 	// Pending entity states, coalesced so only the latest state per entity is
 	// written. These are never dropped; memory is bounded by the entity count.
@@ -63,7 +75,7 @@ type AsyncWriter struct {
 // NewAsyncWriter creates a new AsyncWriter instance.
 func NewAsyncWriter(db *gorm.DB) *AsyncWriter {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &AsyncWriter{
+	aw := &AsyncWriter{
 		db:            db,
 		queue:         make(chan queuedOp, queueSize),
 		ctx:           ctx,
@@ -71,6 +83,19 @@ func NewAsyncWriter(db *gorm.DB) *AsyncWriter {
 		entityPending: make(map[string]*Entity),
 		entitySignal:  make(chan struct{}, 1),
 	}
+	aw.flushInterval.Store(int64(defaultFlushInterval))
+
+	return aw
+}
+
+// SetFlushInterval sets how long the writer waits after the first pending write
+// before committing the batch. Longer intervals coalesce more writes into each
+// transaction, reducing disk writes, at the cost of writes becoming visible to
+// readers (and surviving a crash) that much later. Zero commits as soon as the
+// writer is free. It may be called at any time; the new interval applies from
+// the next batch.
+func (aw *AsyncWriter) SetFlushInterval(d time.Duration) {
+	aw.flushInterval.Store(int64(d))
 }
 
 // Start begins processing write operations in a dedicated goroutine.
@@ -91,20 +116,23 @@ func (aw *AsyncWriter) Start() {
 	}()
 }
 
-// processWrites consumes write operations from the queue, committing everything
-// that is already pending in a single transaction.
+// processWrites waits for a write to become pending, then collects a batch and
+// commits it in a single transaction.
 func (aw *AsyncWriter) processWrites() {
 	for {
+		var first *queuedOp
+
 		select {
 		case <-aw.ctx.Done():
 			// Drain remaining writes before shutdown
 			aw.drainQueue()
 			return
 		case op := <-aw.queue:
-			aw.commitBatch(aw.collectBatch(&op))
+			first = &op
 		case <-aw.entitySignal:
-			aw.commitBatch(aw.collectBatch(nil))
 		}
+
+		aw.commitBatch(aw.collectBatch(first))
 	}
 }
 
@@ -167,14 +195,38 @@ func isBusy(err error) bool {
 	return code == 5 || code == 6 // SQLITE_BUSY, SQLITE_LOCKED
 }
 
-// collectBatch gathers first (if non-nil), any already-queued operations up to
-// maxBatch, and all pending entity states into a single batch without waiting.
+// collectBatch gathers first (if non-nil) and operations arriving within the
+// flush interval, up to maxBatch, plus all pending entity states, into a single
+// batch. It returns early if an operation is being waited on (WaitForWrites) or
+// the writer is shutting down. Entity states keep coalescing while the batch
+// waits, since they are only taken from the pending map at the end.
 func (aw *AsyncWriter) collectBatch(first *queuedOp) []queuedOp {
 	batch := make([]queuedOp, 0, maxBatch)
+	flush := false
+
 	if first != nil {
 		batch = append(batch, *first)
+		flush = first.done != nil
 	}
 
+	timer := time.NewTimer(time.Duration(aw.flushInterval.Load()))
+	defer timer.Stop()
+
+	for !flush && len(batch) < maxBatch {
+		select {
+		case op := <-aw.queue:
+			batch = append(batch, op)
+			flush = op.done != nil
+		case <-aw.entitySignal:
+			// Taken below, with every other pending entity state.
+		case <-timer.C:
+			flush = true
+		case <-aw.ctx.Done():
+			flush = true
+		}
+	}
+
+	// Take whatever else is already queued without waiting.
 collect:
 	for len(batch) < maxBatch {
 		select {
@@ -344,7 +396,8 @@ func (aw *AsyncWriter) Shutdown() {
 }
 
 // WaitForWrites blocks until all currently queued writes have been committed.
-// This is primarily useful for testing.
+// The batch is committed immediately rather than waiting for the flush
+// interval. This is primarily useful for testing.
 func (aw *AsyncWriter) WaitForWrites() {
 	noop := func(*gorm.DB) error { return nil }
 	if aw.runSyncIfNotRunning(noop) {

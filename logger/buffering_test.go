@@ -3,7 +3,6 @@ package logger
 import (
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/dansimau/hal/store"
 )
@@ -117,8 +116,7 @@ func TestGlobalFunctions(t *testing.T) {
 	Debug("Global debug message", "global.debug")
 	Warn("Global warn message", "global.warn")
 
-	// Give a moment for database writes
-	time.Sleep(10 * time.Millisecond)
+	db.WaitForWrites()
 
 	// Verify logs were written
 	var logs []store.Log

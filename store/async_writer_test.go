@@ -93,7 +93,132 @@ func openTestStore(t *testing.T) *store.Store {
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
+	// Commit as soon as the writer is free, so tests that stall the writer
+	// (stallWriter) do not wait out the flush interval.
+	db.SetFlushInterval(0)
+
 	return db
+}
+
+// countLogs returns the number of committed log rows.
+func countLogs(t *testing.T, db *store.Store) int64 {
+	t.Helper()
+
+	var count int64
+	assert.NilError(t, db.Model(&store.Log{}).Count(&count).Error)
+
+	return count
+}
+
+// waitForLogs polls until db holds at least want committed log rows.
+func waitForLogs(t *testing.T, db *store.Store, want int64) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for countLogs(t, db) < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected %d logs, got %d", want, countLogs(t, db))
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func enqueueLog(db *store.Store, text string) {
+	db.EnqueueWrite(func(gdb *gorm.DB) error {
+		return gdb.Create(&store.Log{Timestamp: time.Now(), Level: "INFO", LogText: text}).Error
+	})
+}
+
+// TestWritesAreHeldUntilFlushInterval verifies that writes arriving within the
+// flush interval are held back and then committed together, and that entity
+// states keep coalescing while the batch waits.
+func TestWritesAreHeldUntilFlushInterval(t *testing.T) {
+	t.Parallel()
+
+	db := openTestStore(t)
+	db.SetFlushInterval(500 * time.Millisecond)
+
+	enqueueLog(db, "first")
+	time.Sleep(100 * time.Millisecond)
+	enqueueLog(db, "second")
+	for _, state := range []string{"on", "off"} {
+		db.EnqueueEntityState("light.kitchen", &homeassistant.State{EntityID: "light.kitchen", State: state})
+	}
+
+	assert.Equal(t, countLogs(t, db), int64(0), "writes committed before the flush interval")
+
+	waitForLogs(t, db, 2)
+
+	var entity store.Entity
+	assert.NilError(t, db.First(&entity, "id = ?", "light.kitchen").Error)
+	assert.Equal(t, entity.State.State, "off")
+}
+
+// TestWaitForWritesDoesNotWaitForFlushInterval verifies that a caller waiting on
+// its writes gets them committed immediately.
+func TestWaitForWritesDoesNotWaitForFlushInterval(t *testing.T) {
+	t.Parallel()
+
+	db := openTestStore(t)
+	db.SetFlushInterval(time.Hour)
+
+	enqueueLog(db, "waited")
+
+	start := time.Now()
+	db.WaitForWrites()
+	assert.Assert(t, time.Since(start) < 5*time.Second, "WaitForWrites waited for the flush interval")
+	assert.Equal(t, countLogs(t, db), int64(1))
+}
+
+// TestFullBatchIsCommittedBeforeFlushInterval verifies that a batch is committed
+// as soon as it is full, and the remainder waits for the next interval.
+func TestFullBatchIsCommittedBeforeFlushInterval(t *testing.T) {
+	t.Parallel()
+
+	db := openTestStore(t)
+	db.SetFlushInterval(time.Hour)
+
+	const maxBatch = 500
+	for i := 0; i < maxBatch+100; i++ {
+		enqueueLog(db, fmt.Sprintf("log %d", i))
+	}
+
+	waitForLogs(t, db, maxBatch)
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, countLogs(t, db), int64(maxBatch), "remainder committed before the flush interval")
+
+	db.WaitForWrites()
+	assert.Equal(t, countLogs(t, db), int64(maxBatch+100))
+}
+
+// TestCloseDoesNotWaitForFlushInterval verifies that shutting down commits held
+// writes immediately rather than waiting out the flush interval.
+func TestCloseDoesNotWaitForFlushInterval(t *testing.T) {
+	t.Parallel()
+
+	path := t.TempDir() + "/close.db"
+
+	db, err := store.Open(path)
+	assert.NilError(t, err)
+	db.SetFlushInterval(time.Hour)
+
+	enqueueLog(db, "held")
+	db.EnqueueEntityState("light.hall", &homeassistant.State{EntityID: "light.hall", State: "on"})
+
+	start := time.Now()
+	assert.NilError(t, db.Close())
+	assert.Assert(t, time.Since(start) < 5*time.Second, "Close waited for the flush interval")
+
+	reopened, err := store.Open(path)
+	assert.NilError(t, err)
+	defer reopened.Close()
+
+	assert.Equal(t, countLogs(t, reopened), int64(1))
+
+	var entity store.Entity
+	assert.NilError(t, reopened.First(&entity, "id = ?", "light.hall").Error)
+	assert.Equal(t, entity.State.State, "on")
 }
 
 // stallWriter blocks the writer goroutine until the returned function is called.

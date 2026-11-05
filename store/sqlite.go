@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dansimau/hal/homeassistant"
 
@@ -126,6 +127,14 @@ func (s *Store) EnqueueWrite(op WriteOperation) {
 // EnqueueEntityState asynchronously persists the latest state of an entity.
 func (s *Store) EnqueueEntityState(id string, state *homeassistant.State) {
 	s.asyncWriter.EnqueueEntityState(id, state)
+}
+
+// SetFlushInterval sets how long queued writes are held before being committed
+// together; see AsyncWriter.SetFlushInterval. Writes are visible to readers
+// (including other processes, such as the hal CLI) and survive a crash only
+// once committed, so the interval bounds both read lag and loss on a crash.
+func (s *Store) SetFlushInterval(d time.Duration) {
+	s.asyncWriter.SetFlushInterval(d)
 }
 
 // DroppedWrites returns the number of writes dropped because the queue was full.
