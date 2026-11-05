@@ -88,7 +88,10 @@ func (a *SensorsTriggerLights) WithClock(c clock.Clock) *SensorsTriggerLights {
 	return a
 }
 
-// WithCondition sets a condition that must be true for the automation to run.
+// WithCondition sets a condition that must be true for the lights to be turned
+// on by a sensor. The condition does not affect the turn off timer: a sensor
+// clearing always starts it and a sensor triggering always cancels it, so lights
+// that are already on are never turned off while the sensor is still triggered.
 func (a *SensorsTriggerLights) WithCondition(condition func() bool) *SensorsTriggerLights {
 	a.condition = condition
 
@@ -377,17 +380,15 @@ func (a *SensorsTriggerLights) handleSensorStateChange(ctx context.Context) {
 		return
 	}
 
-	if a.condition != nil && !a.condition() {
-		logger.InfoContext(ctx, "Condition not met, skipping")
-
-		return
-	}
-
 	if a.triggered() {
 		lightsWereDimmedFromTimer := a.isLightDimmedFromTimer()
 
 		logger.InfoContext(ctx, "Sensor triggered", "lightsWereDimmedFromTimer", lightsWereDimmedFromTimer)
 
+		// Always cancel the turn off countdown when the sensor is triggered,
+		// regardless of the condition. Otherwise a brief sensor dropout while
+		// the condition is false would leave the timer running and turn the
+		// lights off while someone is still present.
 		a.stopTurnOffTimer(ctx)
 		a.stopDimLightsTimer(ctx)
 
@@ -395,6 +396,15 @@ func (a *SensorsTriggerLights) handleSensorStateChange(ctx context.Context) {
 		// but it gets overridden by a sensor being triggered again.
 		if a.lightsOn() && !lightsWereDimmedFromTimer {
 			logger.InfoContext(ctx, "Sensor triggered, but lights are already on, ignoring")
+
+			return
+		}
+
+		// The condition only gates turning the lights on. Lights that were
+		// dimmed by our own timer are restored regardless, since that undoes
+		// our own action rather than turning on lights that were off.
+		if a.condition != nil && !a.condition() && !lightsWereDimmedFromTimer {
+			logger.InfoContext(ctx, "Condition not met, not turning on lights")
 
 			return
 		}

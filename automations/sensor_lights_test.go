@@ -2,6 +2,7 @@ package halautomations_test
 
 import (
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -757,6 +758,162 @@ func TestSensorTurnOffCooldownDisabled(t *testing.T) {
 
 	testutil.WaitFor(t, "verify light is on again with no cooldown", func() bool {
 		return testLight.GetState().State == "on"
+	}, func() {
+		spew.Dump(testLight.GetID(), testLight.GetState())
+	})
+}
+
+// A sensor triggering must always cancel the turn off timer, even when the
+// condition is false. Otherwise a brief sensor dropout while the condition is
+// false (e.g. night mode) leaves the timer running and turns the lights off
+// while someone is still present.
+func TestSensorCancelsTurnOffTimerWhenConditionFalse(t *testing.T) {
+	t.Parallel()
+
+	conn, server, cleanup := testutil.NewClientServer(t)
+	defer cleanup()
+
+	mockClock := clock.NewMock()
+
+	testLight := hal.NewLight("test.light")
+	conn.RegisterEntities(testLight)
+
+	testSensor := hal.NewBinarySensor("test.sensor")
+	conn.RegisterEntities(testSensor)
+
+	var conditionMet atomic.Bool
+	conditionMet.Store(true)
+
+	automation := halautomations.NewSensorsTriggerLights().
+		WithName("test automation").
+		WithClock(mockClock).
+		WithCondition(conditionMet.Load).
+		WithSensors(testSensor).
+		WithLights(testLight).
+		TurnsOffAfter(time.Second)
+
+	conn.RegisterAutomations(automation)
+
+	slog.Info("Test: Triggering motion sensor")
+	server.SendEvent(homeassistant.Event{
+		EventType: homeassistant.EventTypeStateChanged,
+		EventData: homeassistant.EventData{
+			EntityID: testSensor.GetID(),
+			NewState: &homeassistant.State{
+				EntityID: testSensor.GetID(),
+				State:    "on",
+			},
+		},
+	})
+
+	testutil.WaitFor(t, "verify light was turned on", func() bool {
+		return testLight.GetState().State == "on"
+	}, func() {
+		spew.Dump(testLight.GetID(), testLight.GetState())
+	})
+
+	// Condition becomes false while the lights are on (e.g. night mode turned on).
+	conditionMet.Store(false)
+
+	// Sensor briefly drops out, which starts the turn off countdown.
+	slog.Info("Test: Clearing motion sensor")
+	server.SendEvent(homeassistant.Event{
+		EventType: homeassistant.EventTypeStateChanged,
+		EventData: homeassistant.EventData{
+			EntityID: testSensor.GetID(),
+			NewState: &homeassistant.State{
+				EntityID: testSensor.GetID(),
+				State:    stateOff,
+			},
+		},
+	})
+
+	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
+		return testSensor.GetState().State == stateOff
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	// Sensor triggers again, which must cancel the countdown.
+	slog.Info("Test: Re-triggering motion sensor")
+	server.SendEvent(homeassistant.Event{
+		EventType: homeassistant.EventTypeStateChanged,
+		EventData: homeassistant.EventData{
+			EntityID: testSensor.GetID(),
+			NewState: &homeassistant.State{
+				EntityID: testSensor.GetID(),
+				State:    "on",
+			},
+		},
+	})
+
+	testutil.WaitFor(t, "motion sensor is triggered", func() bool {
+		return testSensor.GetState().State == "on"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time past the turn off duration")
+	mockClock.Add(2 * time.Second)
+
+	slog.Info("Test: Asserting light is still on")
+	testutil.WaitFor(t, "verify light is still on", func() bool {
+		return testLight.GetState().State == "on"
+	}, func() {
+		spew.Dump(testLight.GetID(), testLight.GetState())
+	})
+
+	// Sensor clears for good; the lights should now turn off even though the
+	// condition is still false.
+	slog.Info("Test: Clearing motion sensor")
+	server.SendEvent(homeassistant.Event{
+		EventType: homeassistant.EventTypeStateChanged,
+		EventData: homeassistant.EventData{
+			EntityID: testSensor.GetID(),
+			NewState: &homeassistant.State{
+				EntityID: testSensor.GetID(),
+				State:    stateOff,
+			},
+		},
+	})
+
+	testutil.WaitFor(t, "motion sensor is cleared", func() bool {
+		return testSensor.GetState().State == stateOff
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	slog.Info("Test: Advancing time")
+	mockClock.Add(2 * time.Second)
+
+	testutil.WaitFor(t, "verify light is off", func() bool {
+		return testLight.GetState().State == stateOff
+	}, func() {
+		spew.Dump(testLight.GetID(), testLight.GetState())
+	})
+
+	// With the condition still false, the sensor triggering must not turn the
+	// lights back on.
+	slog.Info("Test: Triggering motion sensor with condition false")
+	server.SendEvent(homeassistant.Event{
+		EventType: homeassistant.EventTypeStateChanged,
+		EventData: homeassistant.EventData{
+			EntityID: testSensor.GetID(),
+			NewState: &homeassistant.State{
+				EntityID: testSensor.GetID(),
+				State:    "on",
+			},
+		},
+	})
+
+	testutil.WaitFor(t, "motion sensor is triggered", func() bool {
+		return testSensor.GetState().State == "on"
+	}, func() {
+		spew.Dump(testSensor.GetID(), testSensor.GetState())
+	})
+
+	testutil.WaitFor(t, "verify light stays off", func() bool {
+		return testLight.GetState().State == stateOff
 	}, func() {
 		spew.Dump(testLight.GetID(), testLight.GetState())
 	})
