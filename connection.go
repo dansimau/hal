@@ -2,6 +2,7 @@ package hal
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,11 +39,34 @@ type Connection struct {
 	reconnectAttempts atomic.Int32
 }
 
+// parseFlushInterval parses a FlushIntervalEnv value: a non-negative Go
+// duration.
+func parseFlushInterval(value string) (time.Duration, error) {
+	interval, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+
+	if interval < 0 {
+		return 0, fmt.Errorf("flush interval must not be negative: %s", value)
+	}
+
+	return interval, nil
+}
+
 // ConnectionBinder is an interface that can be implemented by entities to bind
 // them to a connection.
 type ConnectionBinder interface {
 	BindConnection(connection *Connection)
 }
+
+// FlushIntervalEnv is the environment variable that sets how long queued
+// database writes (logs, metrics, entity states) are held before being
+// committed together, as a Go duration such as "2s" or "500ms". Longer
+// intervals mean fewer disk writes; shorter ones mean writes show up sooner in
+// the hal CLI and less is lost if the process is killed. Defaults to
+// store.DefaultFlushInterval.
+const FlushIntervalEnv = "HAL_DB_FLUSH_INTERVAL"
 
 func NewConnection(cfg Config) *Connection {
 	dbPath := cfg.DatabasePath
@@ -53,6 +77,15 @@ func NewConnection(cfg Config) *Connection {
 	db, err := store.Open(dbPath)
 	if err != nil {
 		panic(err)
+	}
+
+	if value := os.Getenv(FlushIntervalEnv); value != "" {
+		if interval, err := parseFlushInterval(value); err != nil {
+			logger.Error("Ignoring invalid "+FlushIntervalEnv, "", "value", value, "error", err)
+		} else {
+			db.SetFlushInterval(interval)
+			logger.Info("Database flush interval set from "+FlushIntervalEnv, "", "interval", interval)
+		}
 	}
 
 	api := hassws.NewClient(hassws.ClientConfig{

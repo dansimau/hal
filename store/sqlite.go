@@ -137,6 +137,11 @@ func (s *Store) SetFlushInterval(d time.Duration) {
 	s.asyncWriter.SetFlushInterval(d)
 }
 
+// FlushInterval returns how long queued writes are held before being committed.
+func (s *Store) FlushInterval() time.Duration {
+	return s.asyncWriter.FlushInterval()
+}
+
 // DroppedWrites returns the number of writes dropped because the queue was full.
 func (s *Store) DroppedWrites() int64 {
 	return s.asyncWriter.Dropped()

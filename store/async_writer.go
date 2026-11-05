@@ -19,12 +19,6 @@ const (
 	queueSize = 10000
 	// maxBatch is the maximum number of operations committed in one transaction.
 	maxBatch = 500
-	// defaultFlushInterval is how long the writer waits after the first pending
-	// write before committing, so that writes arriving close together share one
-	// transaction. Every commit rewrites each dirty page in full to the WAL, so
-	// committing per write costs many times more disk writes than committing
-	// per interval (see Store.SetFlushInterval).
-	defaultFlushInterval = 10 * time.Second
 	// dropReportInterval rate-limits warnings about dropped writes.
 	dropReportInterval = 30 * time.Second
 	// busyRetryMin and busyRetryMax bound the backoff between attempts to commit
@@ -32,6 +26,13 @@ const (
 	busyRetryMin = time.Second
 	busyRetryMax = 30 * time.Second
 )
+
+// DefaultFlushInterval is how long the writer waits after the first pending
+// write before committing, so that writes arriving close together share one
+// transaction. Every commit rewrites each dirty page in full to the WAL, so
+// committing per write costs many times more disk writes than committing per
+// interval (see Store.SetFlushInterval).
+const DefaultFlushInterval = 10 * time.Second
 
 // WriteOperation represents a database write operation to be executed asynchronously.
 type WriteOperation func(*gorm.DB) error
@@ -83,7 +84,7 @@ func NewAsyncWriter(db *gorm.DB) *AsyncWriter {
 		entityPending: make(map[string]*Entity),
 		entitySignal:  make(chan struct{}, 1),
 	}
-	aw.flushInterval.Store(int64(defaultFlushInterval))
+	aw.flushInterval.Store(int64(DefaultFlushInterval))
 
 	return aw
 }
@@ -96,6 +97,11 @@ func NewAsyncWriter(db *gorm.DB) *AsyncWriter {
 // the next batch.
 func (aw *AsyncWriter) SetFlushInterval(d time.Duration) {
 	aw.flushInterval.Store(int64(d))
+}
+
+// FlushInterval returns the current flush interval.
+func (aw *AsyncWriter) FlushInterval() time.Duration {
+	return time.Duration(aw.flushInterval.Load())
 }
 
 // Start begins processing write operations in a dedicated goroutine.

@@ -138,6 +138,12 @@ location:
 # readTimeout: 60s
 ```
 
+Logs, metrics and entity states are written to the database in batches: queued
+writes are held for 10s and committed together, which keeps SSD writes low.
+Set `HAL_DB_FLUSH_INTERVAL` (a Go duration such as `2s`) to trade disk writes
+for lower latency: writes show up in `hal logs` sooner, and less is lost if the
+process is killed.
+
 ## Entity types
 
 | Type              | Constructor                     | Notable helpers                                                    |
